@@ -5,3 +5,7 @@ __pycache__/
 *.pyd
 *.log
 .DS_Store
+snap_qa-snapshot-inspector-poc.zip
+snap_*/
+temp_live.uix
+devices.json

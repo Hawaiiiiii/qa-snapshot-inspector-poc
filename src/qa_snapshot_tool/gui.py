@@ -1,444 +1,430 @@
 import os
+import glob
+import time
 import json
-from typing import Dict, List
-
 from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QPushButton,
-    QLabel,
-    QTreeWidget,
-    QTreeWidgetItem,
-    QGraphicsView,
-    QGraphicsScene,
-    QGraphicsRectItem,
-    QFileDialog,
-    QTextEdit,
-    QSplitter,
-    QGroupBox,
-    QComboBox,
-    QTableWidget,
-    QTableWidgetItem,
-    QHeaderView,
-    QMessageBox,
-    QListWidget,
-    QListWidgetItem,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTreeWidget, QTreeWidgetItem,
+    QGraphicsView, QGraphicsScene, QGraphicsRectItem, QFileDialog, QTextEdit, 
+    QGroupBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, 
+    QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication
 )
-from PySide6.QtGui import QPixmap, QPen, QBrush
-from PySide6.QtCore import Qt, QRectF, QPointF
+from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor
+from PySide6.QtCore import Qt, QRectF, Signal, QTimer
 
-from uix_parser import UixParser, UiNode
+from uix_parser import UixParser
 from locator_suggester import LocatorSuggester
-from adb_capture import AdbCapture
+from adb_manager import AdbManager
+from live_mirror import VideoThread, HierarchyThread, LogcatThread, FocusMonitorThread
+from theme import Theme
 
+class SmartGraphicsView(QGraphicsView):
+    mouse_moved = Signal(int, int)
+    input_tap = Signal(int, int)
+    input_swipe = Signal(int, int, int, int)
+    view_resized = Signal()
 
-class ZoomableGraphicsView(QGraphicsView):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setDragMode(QGraphicsView.ScrollHandDrag)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self._zoom = 0
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self.setMouseTracking(True)
+        self.setDragMode(QGraphicsView.NoDrag)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setBackgroundBrush(QBrush(QColor(Theme.BG_DARK)))
+        
+        self.click_enabled = True
+        self.control_enabled = False
+        self._drag_start = None
+        self.crosshair_pos = None # Scene coordinates
 
     def wheelEvent(self, event):
-        if event.angleDelta().y() > 0:
-            factor = 1.15
-            self._zoom += 1
+        if event.modifiers() & Qt.ControlModifier:
+            if event.angleDelta().y() > 0: self.scale(1.1, 1.1)
+            else: self.scale(0.9, 0.9)
+            event.accept()
+        elif self.control_enabled:
+            # Simulate scroll
+            delta = event.angleDelta().y()
+            self.input_swipe.emit(500, 800, 500, 800 + int(delta))
+            event.accept()
         else:
-            factor = 1 / 1.15
-            self._zoom -= 1
-        self.scale(factor, factor)
+            super().wheelEvent(event)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start = self.mapToScene(event.pos())
+        super().mousePressEvent(event)
 
-class MainWindow(QWidget):
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._drag_start:
+            end = self.mapToScene(event.pos())
+            dx = end.x() - self._drag_start.x()
+            dy = end.y() - self._drag_start.y()
+            dist = (dx**2 + dy**2)**0.5
+            
+            if self.control_enabled:
+                if dist > 20: 
+                    self.input_swipe.emit(int(self._drag_start.x()), int(self._drag_start.y()), int(end.x()), int(end.y()))
+                else:
+                    self.input_tap.emit(int(end.x()), int(end.y()))
+            else:
+                if dist < 20 and self.click_enabled:
+                    self.input_tap.emit(int(end.x()), int(end.y()))
+            self._drag_start = None
+        super().mouseReleaseEvent(event)
+
+    def mouseMoveEvent(self, event):
+        # Map viewport position to Scene Position for accurate Crosshair
+        scene_pos = self.mapToScene(event.pos())
+        self.crosshair_pos = scene_pos
+        self.mouse_moved.emit(int(scene_pos.x()), int(scene_pos.y()))
+        self.viewport().update() # Trigger repaint
+        super().mouseMoveEvent(event)
+
+    def drawForeground(self, painter, rect):
+        if self.crosshair_pos:
+            painter.setPen(QPen(QColor(Theme.ACCENT_YELLOW), 1, Qt.DashLine))
+            x = self.crosshair_pos.x()
+            y = self.crosshair_pos.y()
+            
+            # Draw infinite lines across the scene
+            scene_rect = self.sceneRect()
+            painter.drawLine(x, scene_rect.top(), x, scene_rect.bottom())
+            painter.drawLine(scene_rect.left(), y, scene_rect.right(), y)
+            
+            # Draw coordinates text
+            text = f"({int(x)}, {int(y)})"
+            painter.setPen(QPen(QColor(Theme.TEXT_WHITE), 1))
+            painter.drawText(x + 10, y - 10, text)
+            
+        super().drawForeground(painter, rect)
+
+    def resizeEvent(self, e): self.view_resized.emit(); super().resizeEvent(e)
+
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("QA Snapshot Inspector & Locator Assistant")
-        self.resize(1500, 900)
-
-        # State
-        self.current_node_map: Dict[int, UiNode] = {}
-        self.current_snapshot_path = ""
-        self.snapshots_root = ""
-        self.pixmap_item = None
-        self.rect_item = None
-        self.locator_cache: List[Dict[str, str]] = []
-
+        self.setWindowTitle("QUANTUM Inspector | Paradox Cat Internal")
+        self.resize(1600, 1000)
+        
+        self.current_node_map = {}
+        self.node_to_item_map = {}
+        self.rect_map = []
+        self.active_device = None
+        self.root_node = None
+        
+        # Threads
+        self.video_thread = None
+        self.xml_thread = None
+        self.log_thread = None
+        self.focus_thread = None
+        
+        self.locked_node = None
+        self.auto_fit = True
+        self.fps_counter = 0
+        
         self.setup_ui()
         self.refresh_devices()
 
+        self.fps_timer = QTimer()
+        self.fps_timer.timeout.connect(self.update_fps)
+        self.fps_timer.start(1000)
+
     def setup_ui(self):
-        main_layout = QHBoxLayout(self)
-
-        # --- LEFT PANEL: BROWSER & DEVICES ---
-        left_layout = QVBoxLayout()
-        left_panel = QWidget()
-        left_panel.setLayout(left_layout)
-        left_panel.setFixedWidth(320)
-
-        # Device Section
-        dev_group = QGroupBox("Device (Optional ADB Mode)")
-        dev_layout = QVBoxLayout()
-        self.device_combo = QComboBox()
-        self.refresh_btn = QPushButton("Refresh Devices")
-        self.refresh_btn.clicked.connect(self.refresh_devices)
-        self.capture_btn = QPushButton("Capture Snapshot Now")
-        self.capture_btn.setStyleSheet("background-color: #d32f2f; font-weight: bold;")
-        self.capture_btn.clicked.connect(self.capture_new_snapshot)
-        self.device_status = QLabel("ADB status: unknown")
-        self.device_status.setWordWrap(True)
-
-        dev_layout.addWidget(self.device_combo)
-        dev_layout.addWidget(self.refresh_btn)
-        dev_layout.addWidget(self.capture_btn)
-        dev_layout.addWidget(self.device_status)
-        dev_group.setLayout(dev_layout)
-
-        # Snapshot Browser
-        browser_group = QGroupBox("Offline Snapshots")
-        browser_layout = QVBoxLayout()
-        self.open_folder_btn = QPushButton("Open Snapshot Folder")
-        self.open_folder_btn.clicked.connect(self.open_snapshot_folder)
-
-        self.snapshot_list = QTreeWidget()
-        self.snapshot_list.setColumnCount(5)
-        self.snapshot_list.setHeaderLabels(["Snapshot", "screenshot", "dump.uix", "meta.json", "logcat"])
-        self.snapshot_list.itemClicked.connect(self.on_snapshot_clicked)
-
-        self.snapshot_warning = QLabel("")
-        self.snapshot_warning.setWordWrap(True)
-
-        browser_layout.addWidget(self.open_folder_btn)
-        browser_layout.addWidget(self.snapshot_list)
-        browser_layout.addWidget(self.snapshot_warning)
-        browser_group.setLayout(browser_layout)
-
-        left_layout.addWidget(dev_group)
-        left_layout.addWidget(browser_group)
-
-        # --- CENTER PANEL: VIEWER ---
-        center_panel = QGroupBox("UI Viewer")
-        center_layout = QVBoxLayout()
-
+        central = QWidget(); central_lay = QVBoxLayout(central); central_lay.setContentsMargins(0,0,0,0)
+        
+        # Toolbar
+        tb = QToolBar(); tb.setStyleSheet(f"background: {Theme.BG_HEADER}; border-bottom: 1px solid {Theme.BORDER}; spacing: 15px;")
+        self.lbl_fps = QLabel("FPS: 0"); self.lbl_fps.setStyleSheet("color: #666; font-weight: bold;")
+        self.lbl_coords = QLabel("X: 0, Y: 0"); self.lbl_coords.setStyleSheet("color: #ccc; font-family: monospace;")
+        self.lbl_focus = QLabel("Focus: -"); self.lbl_focus.setStyleSheet("color: #88ccff; font-weight: bold;")
+        
+        act_fit = QAction("Fit Screen", self); act_fit.triggered.connect(self.enable_fit)
+        act_11 = QAction("1:1 Pixel", self); act_11.triggered.connect(self.disable_fit)
+        
+        tb.addWidget(self.lbl_fps); tb.addWidget(self.lbl_coords); tb.addSeparator(); tb.addWidget(self.lbl_focus)
+        tb.addSeparator(); tb.addAction(act_fit); tb.addAction(act_11)
+        central_lay.addWidget(tb)
+        
+        # View
         self.scene = QGraphicsScene()
-        self.view = ZoomableGraphicsView(self.scene)
+        self.view = SmartGraphicsView(self.scene)
+        self.view.mouse_moved.connect(self.on_mouse_hover)
+        self.view.input_tap.connect(self.handle_tap)
+        self.view.input_swipe.connect(self.handle_swipe)
+        self.view.view_resized.connect(self.handle_resize)
+        central_lay.addWidget(self.view)
+        
+        self.setCentralWidget(central)
 
-        center_layout.addWidget(self.view)
-        center_panel.setLayout(center_layout)
+        # Docks
+        self.setup_control_dock()
+        self.setup_tree_dock()
+        self.setup_inspector_dock()
 
-        # --- RIGHT PANEL: INSPECTOR ---
-        right_splitter = QSplitter(Qt.Vertical)
+        # Overlay Items
+        self.rect_item = QGraphicsRectItem()
+        self.rect_item.setPen(QPen(QColor(Theme.BMW_BLUE), 3))
+        self.rect_item.setZValue(99)
+        self.scene.addItem(self.rect_item); self.rect_item.hide()
+        self.pixmap_item = None
 
-        # Tree Hierarchy
-        self.hierarchy_tree = QTreeWidget()
-        self.hierarchy_tree.setHeaderLabel("UI Hierarchy (.uix)")
-        self.hierarchy_tree.itemClicked.connect(self.on_hierarchy_item_clicked)
-        right_splitter.addWidget(self.hierarchy_tree)
+    def setup_control_dock(self):
+        d = QDockWidget("Environment", self); w = QWidget(); l = QVBoxLayout(w)
+        
+        # Device Selection
+        gb_dev = QGroupBox("Target Device"); gl = QVBoxLayout()
+        self.combo_dev = QComboBox(); self.combo_dev.currentIndexChanged.connect(self.on_dev_change)
+        btn_ref = QPushButton("Refresh List"); btn_ref.clicked.connect(self.refresh_devices)
+        gl.addWidget(self.combo_dev); gl.addWidget(btn_ref)
+        gb_dev.setLayout(gl); l.addWidget(gb_dev)
+        
+        # Live Modes
+        gb_live = QGroupBox("Live Mirror"); ll = QVBoxLayout()
+        self.btn_live = QPushButton(" START LIVE STREAM"); self.btn_live.setProperty("class", "primary")
+        self.btn_live.clicked.connect(self.toggle_live)
+        self.chk_turbo = QLabel("ℹ️ Optimized"); self.chk_turbo.setStyleSheet("color: #666; font-size: 8pt;")
+        ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo)
+        gb_live.setLayout(ll); l.addWidget(gb_live)
+        
+        # Snapshots
+        gb_snap = QGroupBox("Snapshot / Offline"); sl = QVBoxLayout()
+        btn_cap = QPushButton("Capture Snapshot"); btn_cap.clicked.connect(self.capture_snapshot)
+        btn_load = QPushButton("Load Offline Dump..."); btn_load.clicked.connect(self.load_snapshot_dialog)
+        sl.addWidget(btn_cap); sl.addWidget(btn_load)
+        gb_snap.setLayout(sl); l.addWidget(gb_snap)
+        
+        l.addStretch()
+        d.setWidget(w); self.addDockWidget(Qt.LeftDockWidgetArea, d)
 
-        # Details Panel
-        details_group = QGroupBox("Node Details")
-        details_layout = QVBoxLayout()
-        self.details_table = QTableWidget()
-        self.details_table.setColumnCount(2)
-        self.details_table.setHorizontalHeaderLabels(["Property", "Value"])
-        self.details_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        details_layout.addWidget(self.details_table)
-        details_group.setLayout(details_layout)
-        right_splitter.addWidget(details_group)
+    def setup_tree_dock(self):
+        d = QDockWidget("Hierarchy", self)
+        self.tree = QTreeWidget(); self.tree.setHeaderLabel("UI Tree")
+        self.tree.itemClicked.connect(self.on_tree_click)
+        d.setWidget(self.tree); self.addDockWidget(Qt.RightDockWidgetArea, d)
 
-        # Locator Suggestions
-        locator_group = QGroupBox("Generate Locators")
-        loc_layout = QVBoxLayout()
-        self.locator_list = QListWidget()
-        self.locator_preview = QTextEdit()
-        self.locator_preview.setReadOnly(True)
-        self.locator_list.currentRowChanged.connect(self.on_locator_selected)
+    def setup_inspector_dock(self):
+        d = QDockWidget("Inspector", self); tabs = QTabWidget()
+        
+        # Properties Tab (The one missing data in your screenshot)
+        self.tbl_props = QTableWidget(); self.tbl_props.setColumnCount(2)
+        self.tbl_props.setHorizontalHeaderLabels(["Property", "Value"])
+        self.tbl_props.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_props.verticalHeader().setVisible(False)
+        tabs.addTab(self.tbl_props, "Node Details")
+        
+        # Selectors Tab (Leandro's Requirement)
+        w_loc = QWidget(); l_loc = QVBoxLayout(w_loc)
+        self.combo_fmt = QComboBox(); self.combo_fmt.addItems(["Python (Appium)", "Java (By.xpath)", "Raw XPath"])
+        self.combo_fmt.currentIndexChanged.connect(self.update_locators_text)
+        self.txt_loc = QTextEdit(); self.txt_loc.setReadOnly(True)
+        l_loc.addWidget(self.combo_fmt); l_loc.addWidget(self.txt_loc)
+        tabs.addTab(w_loc, "Smart Selectors")
+        
+        # Logcat Tab
+        self.txt_log = QTextEdit(); self.txt_log.setReadOnly(True)
+        tabs.addTab(self.txt_log, "Logcat")
+        
+        d.setWidget(tabs); self.addDockWidget(Qt.BottomDockWidgetArea, d)
 
-        loc_btn_layout = QHBoxLayout()
-        self.copy_btn = QPushButton("Copy to Clipboard")
-        self.copy_btn.clicked.connect(self.copy_locator_to_clipboard)
-        self.save_btn = QPushButton("Save locator_snippets.txt")
-        self.save_btn.clicked.connect(self.save_locator_snippets)
-        loc_btn_layout.addWidget(self.copy_btn)
-        loc_btn_layout.addWidget(self.save_btn)
+    # --- Core Logic ---
 
-        loc_layout.addWidget(self.locator_list)
-        loc_layout.addWidget(self.locator_preview)
-        loc_layout.addLayout(loc_btn_layout)
-        locator_group.setLayout(loc_layout)
-        right_splitter.addWidget(locator_group)
-
-        # Combine Layouts
-        splitter_main = QSplitter(Qt.Horizontal)
-        splitter_main.addWidget(left_panel)
-        splitter_main.addWidget(center_panel)
-        splitter_main.addWidget(right_splitter)
-        splitter_main.setStretchFactor(1, 2)
-        splitter_main.setStretchFactor(2, 2)
-
-        main_layout.addWidget(splitter_main)
-
-    # --- LOGIC: ADB ---
     def refresh_devices(self):
-        self.device_combo.clear()
-        devices = AdbCapture.get_devices()
-        self.device_combo.addItems(devices)
-        if devices and "Error" in devices[0]:
-            self.device_status.setText("ADB not found. Offline mode only.")
+        self.combo_dev.blockSignals(True); self.combo_dev.clear()
+        devs = AdbManager.get_devices_detailed()
+        for d in devs:
+            self.combo_dev.addItem(f"{d['model']} ({d['serial']})", d['serial'])
+        self.combo_dev.blockSignals(False)
+        if devs: self.on_dev_change(0)
+
+    def on_dev_change(self, idx):
+        self.active_device = self.combo_dev.itemData(idx)
+
+    def toggle_live(self):
+        if self.video_thread:
+            # Stop
+            self.video_thread.stop(); self.video_thread = None
+            self.xml_thread.stop(); self.xml_thread = None
+            self.log_thread.stop(); self.log_thread = None
+            self.focus_thread.stop(); self.focus_thread = None
+            self.view.control_enabled = False
+            self.btn_live.setText(" START LIVE STREAM"); self.btn_live.setProperty("class", "primary")
         else:
-            self.device_status.setText(f"{len(devices)} device(s) detected")
+            if not self.active_device: return
+            # Start
+            self.video_thread = VideoThread(self.active_device)
+            self.video_thread.frame_ready.connect(self.on_frame)
+            self.video_thread.start()
+            
+            self.xml_thread = HierarchyThread(self.active_device)
+            self.xml_thread.tree_ready.connect(self.on_tree_data)
+            self.xml_thread.start()
+            
+            self.log_thread = LogcatThread(self.active_device)
+            self.log_thread.log_line.connect(lambda l: self.txt_log.append(l))
+            self.log_thread.start()
+            
+            self.focus_thread = FocusMonitorThread(self.active_device)
+            self.focus_thread.focus_changed.connect(lambda f: self.lbl_focus.setText(f"Focus: {f}"))
+            self.focus_thread.start()
+            
+            self.view.control_enabled = True
+            self.btn_live.setText(" STOP LIVE"); self.btn_live.setProperty("class", "danger")
+        
+        self.polish_btn(self.btn_live)
 
-    def capture_new_snapshot(self):
-        device = self.device_combo.currentText()
-        if not device or "Error" in device or "offline" in device:
-            QMessageBox.warning(self, "Error", "Select a valid online device first.")
-            return
+    def polish_btn(self, btn): btn.style().unpolish(btn); btn.style().polish(btn)
 
-        folder = QFileDialog.getExistingDirectory(self, "Select Save Location")
-        if folder:
-            import datetime
-
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            snap_path = os.path.join(folder, f"snapshot_{timestamp}")
-
-            self.capture_btn.setText("Capturing... wait...")
-            self.capture_btn.setEnabled(False)
-            self.repaint()
-
-            try:
-                success, path = AdbCapture.capture_snapshot(device, snap_path)
-                if success:
-                    self.load_snapshot(path)
-                    self.populate_snapshot_list(folder)
-            except Exception as e:
-                QMessageBox.critical(self, "Capture Failed", str(e))
-            finally:
-                self.capture_btn.setText("Capture Snapshot Now")
-                self.capture_btn.setEnabled(True)
-
-    # --- LOGIC: OFFLINE LOADING ---
-    def open_snapshot_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Snapshot Folder or Parent")
-        if not folder:
-            return
-
-        if self._is_snapshot_folder(folder):
-            self.snapshots_root = os.path.dirname(folder)
-            self.populate_snapshot_list(self.snapshots_root)
-            self.load_snapshot(folder)
+    def on_frame(self, data):
+        img = QImage.fromData(data)
+        if not self.pixmap_item:
+            self.pixmap_item = self.scene.addPixmap(QPixmap.fromImage(img))
+            self.pixmap_item.setZValue(0)
+            self.handle_resize()
         else:
-            self.snapshots_root = folder
-            self.populate_snapshot_list(folder)
-            latest = self._get_latest_snapshot(folder)
-            if latest:
-                self.load_snapshot(latest)
+            self.pixmap_item.setPixmap(QPixmap.fromImage(img))
+        self.fps_counter += 1
 
-    def populate_snapshot_list(self, parent_folder: str):
-        self.snapshot_list.clear()
-        if not os.path.isdir(parent_folder):
-            return
+    def update_fps(self):
+        self.lbl_fps.setText(f"FPS: {self.fps_counter}")
+        self.fps_counter = 0
 
-        folders = [
-            os.path.join(parent_folder, d)
-            for d in os.listdir(parent_folder)
-            if os.path.isdir(os.path.join(parent_folder, d))
+    def on_tree_data(self, xml_str, changed):
+        if not changed and self.root_node: return
+        
+        root, _ = UixParser.parse(xml_str)
+        self.root_node = root
+        
+        self.tree.clear(); self.current_node_map = {}; self.node_to_item_map = {}; self.rect_map = []
+        if root: self.populate_tree(root, self.tree)
+        
+        # Restore selection logic would go here
+        
+    def populate_tree(self, node, parent):
+        name = f"{node.class_name.split('.')[-1]}"
+        if node.resource_id: name += f" ({node.resource_id.split('/')[-1]})"
+        elif node.text: name += f" \"{node.text}\""
+        
+        item = QTreeWidgetItem(parent); item.setText(0, name)
+        self.current_node_map[id(item)] = node; self.node_to_item_map[id(node)] = item
+        
+        if node.valid_bounds: self.rect_map.append((node.rect, node))
+        for c in node.children: self.populate_tree(c, item)
+
+    def on_mouse_hover(self, x, y):
+        self.lbl_coords.setText(f"X: {x}, Y: {y}")
+        # Hover detection
+        best_node = None; best_area = float('inf')
+        for rect, node in self.rect_map:
+            rx, ry, rw, rh = rect
+            if rx <= x <= rx+rw and ry <= y <= ry+rh:
+                area = rw * rh
+                if area < best_area: best_area = area; best_node = node
+        
+        if best_node:
+            self.view.setCursor(Qt.PointingHandCursor if best_node.clickable else Qt.ArrowCursor)
+            if not self.locked_node: self.select_node(best_node, scroll=False)
+
+    def handle_tap(self, x, y):
+        if self.video_thread: AdbManager.tap(self.active_device, x, y)
+        else:
+            # Lock selection in offline mode
+            self.locked_node = True
+            self.rect_item.setPen(QPen(QColor(Theme.ACCENT_YELLOW), 3))
+
+    def handle_swipe(self, x1, y1, x2, y2):
+        if self.video_thread: AdbManager.swipe(self.active_device, x1, y1, x2, y2)
+
+    def select_node(self, node, scroll=True):
+        x, y, w, h = node.rect
+        self.rect_item.setRect(QRectF(x, y, w, h)); self.rect_item.show()
+        
+        # Populate Table (Restored missing data!)
+        data = [
+            ("Index", node.index), ("Text", node.text), ("Resource-ID", node.resource_id),
+            ("Class", node.class_name), ("Package", node.package), ("Content-Desc", node.content_desc),
+            ("Checkable", str(node.checkable)), ("Checked", str(node.checked)),
+            ("Clickable", str(node.clickable)), ("Enabled", str(node.enabled)),
+            ("Focusable", str(node.focusable)), ("Focused", str(node.focused)),
+            ("Scrollable", str(node.scrollable)), ("Password", str(node.password)),
+            ("Selected", str(node.selected)), ("Bounds", node.bounds_str)
         ]
-        folders.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        
+        self.tbl_props.setRowCount(0)
+        for i, (k,v) in enumerate(data):
+            self.tbl_props.insertRow(i)
+            self.tbl_props.setItem(i, 0, QTableWidgetItem(k))
+            self.tbl_props.setItem(i, 1, QTableWidgetItem(v))
+        
+        self.generate_selectors(node)
+        
+        if scroll:
+            item = self.node_to_item_map.get(id(node))
+            if item:
+                self.tree.blockSignals(True); self.tree.setCurrentItem(item); self.tree.scrollToItem(item); self.tree.blockSignals(False)
 
-        for folder in folders:
-            base = os.path.basename(folder)
-            status = self._snapshot_status(folder)
-            item = QTreeWidgetItem([
-                base,
-                status["screenshot"],
-                status["dump"],
-                status["meta"],
-                status["logcat"],
-            ])
-            if status["missing"]:
-                item.setForeground(0, QBrush(Qt.yellow))
-            for idx, key in enumerate(["screenshot", "dump", "meta", "logcat"], start=1):
-                if status[key] == "Missing":
-                    item.setForeground(idx, QBrush(Qt.red))
-                else:
-                    item.setForeground(idx, QBrush(Qt.green))
-            self.snapshot_list.addTopLevelItem(item)
-            item.setData(0, Qt.UserRole, folder)
+    def generate_selectors(self, node):
+        self.current_suggestions = LocatorSuggester.generate_locators(node, self.root_node)
+        self.update_locators_text()
 
-    def on_snapshot_clicked(self, item, col):
-        path = item.data(0, Qt.UserRole)
-        if path:
+    def update_locators_text(self):
+        if not hasattr(self, 'current_suggestions'): return
+        fmt = self.combo_fmt.currentText()
+        out = ""
+        
+        for s in self.current_suggestions:
+            xpath = s['xpath']
+            # Formatting logic for Leandro's Python/Appium requirement
+            if "Python" in fmt:
+                code = f'driver.find_element(AppiumBy.XPATH, "{xpath}")'
+            elif "Java" in fmt:
+                code = f'driver.findElement(By.xpath("{xpath}"));'
+            else:
+                code = xpath
+                
+            icon = "🌟" if s['type'].startswith("Scoped") else "🔹"
+            out += f"{icon} {s['type']}\n{code}\n\n"
+            
+        self.txt_loc.setText(out)
+
+    def on_tree_click(self, item, col):
+        node = self.current_node_map.get(id(item))
+        if node:
+            self.locked_node = True
+            self.rect_item.setPen(QPen(QColor(Theme.ACCENT_YELLOW), 3))
+            self.select_node(node, scroll=False)
+
+    def capture_snapshot(self):
+        if not self.active_device: return
+        d = QFileDialog.getExistingDirectory(self, "Save Snapshot")
+        if d:
+            path = os.path.join(d, f"snap_{int(time.time())}")
+            AdbManager.capture_snapshot(self.active_device, path)
             self.load_snapshot(path)
 
-    def load_snapshot(self, path: str):
-        self.current_snapshot_path = path
-        self.setWindowTitle(f"Inspector - {os.path.basename(path)}")
+    def load_snapshot_dialog(self):
+        d = QFileDialog.getExistingDirectory(self, "Open Snapshot Folder")
+        if d: self.load_snapshot(d)
 
-        warnings = []
+    def load_snapshot(self, path):
+        # Stop live mode if active
+        if self.video_thread: self.toggle_live()
+        
+        # Load Screenshot
+        png = os.path.join(path, "screenshot.png")
+        if os.path.exists(png):
+            self.scene.clear(); self.scene.addItem(self.rect_item)
+            self.pixmap_item = self.scene.addPixmap(QPixmap(png))
+            self.handle_resize()
+            
+        # Load XML
+        xml = os.path.join(path, "dump.uix")
+        if os.path.exists(xml):
+            with open(xml, 'r', encoding='utf-8') as f:
+                self.on_tree_data(f.read(), True)
+        
+        self.setWindowTitle(f"QUANTUM Inspector - {os.path.basename(path)}")
 
-        # 1. Load Image
-        img_path = os.path.join(path, "screenshot.png")
-        self.scene.clear()
-        self.pixmap_item = None
-        self.rect_item = None
-        if os.path.exists(img_path):
-            pixmap = QPixmap(img_path)
-            self.pixmap_item = self.scene.addPixmap(pixmap)
-            self.rect_item = QGraphicsRectItem()
-            self.rect_item.setPen(QPen(Qt.red, 2))
-            self.rect_item.setZValue(1)
-            self.scene.addItem(self.rect_item)
-            self.rect_item.hide()
-        else:
-            warnings.append("screenshot.png missing")
-
-        # 2. Load XML
-        xml_path = os.path.join(path, "dump.uix")
-        self.hierarchy_tree.clear()
-        self.current_node_map = {}
-        if os.path.exists(xml_path):
-            root_node = UixParser.parse(xml_path)
-            if root_node:
-                self.populate_tree(root_node, self.hierarchy_tree)
-        else:
-            warnings.append("dump.uix missing")
-
-        # 3. Load Meta (Optional)
-        meta_path = os.path.join(path, "meta.json")
-        if os.path.exists(meta_path):
-            try:
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.snapshot_warning.setText(f"Meta: activity {data.get('focus', '')}")
-            except Exception:
-                warnings.append("meta.json malformed")
-        else:
-            warnings.append("meta.json missing")
-
-        # 4. Logcat (Optional)
-        log_path = os.path.join(path, "logcat.txt")
-        if not os.path.exists(log_path):
-            warnings.append("logcat.txt missing")
-
-        if warnings:
-            self.snapshot_warning.setText("Warnings: " + ", ".join(warnings))
-        else:
-            self.snapshot_warning.setText("Snapshot loaded successfully.")
-
-    def populate_tree(self, node: UiNode, parent_widget):
-        display_text = node.class_name or "<unknown>"
-        if node.resource_id:
-            display_text += f" ({node.resource_id.split('/')[-1]})"
-        elif node.text:
-            display_text += f" [\"{node.text}\"]"
-
-        item = QTreeWidgetItem(parent_widget)
-        item.setText(0, display_text)
-        self.current_node_map[id(item)] = node
-
-        for child in node.children:
-            self.populate_tree(child, item)
-
-    # --- LOGIC: INTERACTION ---
-    def on_hierarchy_item_clicked(self, item, col):
-        node = self.current_node_map.get(id(item))
-        if not node:
-            return
-
-        # 1. Draw Rect
-        if self.rect_item:
-            x, y, w, h = node.rect
-            self.rect_item.setRect(QRectF(x, y, w, h))
-            self.rect_item.show()
-            self.view.centerOn(QPointF(x + w / 2, y + h / 2))
-
-        # 2. Update Properties
-        self.details_table.setRowCount(0)
-        props = [
-            ("Text", node.text),
-            ("Resource-ID", node.resource_id),
-            ("Class", node.class_name),
-            ("Package", node.package),
-            ("Content-Desc", node.content_desc),
-            ("Bounds", node.bounds_raw),
-            ("Clickable", str(node.clickable)),
-            ("Checked", str(node.checked)),
-            ("Enabled", str(node.enabled)),
-            ("Focused", str(node.focused)),
-        ]
-        for i, (k, v) in enumerate(props):
-            self.details_table.insertRow(i)
-            self.details_table.setItem(i, 0, QTableWidgetItem(k))
-            self.details_table.setItem(i, 1, QTableWidgetItem(v))
-
-        # 3. Generate Locators
-        self.locator_cache = LocatorSuggester.generate_locators(node)
-        self.locator_list.clear()
-        for entry in self.locator_cache:
-            self.locator_list.addItem(QListWidgetItem(entry["type"]))
-        if self.locator_cache:
-            self.locator_list.setCurrentRow(0)
-
-    def on_locator_selected(self, index: int):
-        if index < 0 or index >= len(self.locator_cache):
-            self.locator_preview.setText("")
-            return
-        entry = self.locator_cache[index]
-        self.locator_preview.setText(entry.get("value", ""))
-
-    def copy_locator_to_clipboard(self):
-        text = self.locator_preview.toPlainText().strip()
-        if not text:
-            QMessageBox.information(self, "No locator", "Select a node to generate locators.")
-            return
-        self.locator_preview.selectAll()
-        self.locator_preview.copy()
-
-    def save_locator_snippets(self):
-        if not self.current_snapshot_path:
-            QMessageBox.information(self, "No snapshot", "Load a snapshot first.")
-            return
-        if not self.locator_cache:
-            QMessageBox.information(self, "No locators", "Select a node to generate locators.")
-            return
-
-        out_path = os.path.join(self.current_snapshot_path, "locator_snippets.txt")
-        try:
-            with open(out_path, "w", encoding="utf-8") as f:
-                for entry in self.locator_cache:
-                    f.write(f"{entry['type']}\n")
-                    f.write(f"{entry['value']}\n\n")
-            QMessageBox.information(self, "Saved", f"Saved to {out_path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Failed", str(e))
-
-    def _snapshot_status(self, folder: str) -> Dict[str, str]:
-        screenshot = os.path.exists(os.path.join(folder, "screenshot.png"))
-        dump = os.path.exists(os.path.join(folder, "dump.uix"))
-        meta = os.path.exists(os.path.join(folder, "meta.json"))
-        logcat = os.path.exists(os.path.join(folder, "logcat.txt"))
-        missing = not (screenshot and dump)
-
-        return {
-            "screenshot": "OK" if screenshot else "Missing",
-            "dump": "OK" if dump else "Missing",
-            "meta": "OK" if meta else "Missing",
-            "logcat": "OK" if logcat else "Missing",
-            "missing": missing,
-        }
-
-    def _is_snapshot_folder(self, folder: str) -> bool:
-        return any(
-            os.path.exists(os.path.join(folder, name))
-            for name in ["screenshot.png", "dump.uix", "meta.json", "logcat.txt"]
-        )
-
-    def _get_latest_snapshot(self, parent: str) -> str:
-        folders = [
-            os.path.join(parent, d)
-            for d in os.listdir(parent)
-            if os.path.isdir(os.path.join(parent, d))
-        ]
-        if not folders:
-            return ""
-        return sorted(folders, key=lambda p: os.path.getmtime(p), reverse=True)[0]
+    def enable_fit(self): self.auto_fit = True; self.handle_resize()
+    def disable_fit(self): self.auto_fit = False; self.view.resetTransform()
+    def handle_resize(self):
+        if self.auto_fit and self.pixmap_item: self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)

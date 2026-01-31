@@ -1,14 +1,24 @@
-# QA Snapshot Inspector & Locator Assistant
+# QUANTUM Inspector (QA Snapshot Inspector)
 
-A Python desktop GUI for QA engineers to inspect Android UI snapshots offline, debug locator issues, and generate robust/scoped Page Object locators.
+A Python desktop GUI to inspect Android UI snapshots (UIAutomator dumps + screenshots), review live device state, and generate robust locators for QA automation.
+
+![QUANTUM Inspector UI](docs/screenshot.png)
+
+## What it does
+
+- Live mirror via ADB (optional) to inspect the current UI in real time.
+- Offline snapshot inspection from saved folders.
+- UI tree navigation with hover/selection overlay on the screenshot.
+- Inspector panel with node properties (text, bounds, resource-id, etc.).
+- Locator suggestions (XPath + Appium Java/Python formats).
 
 ## Prerequisites
 
 - Python 3.11+
 - Windows 11 (designed for, but works on macOS/Linux)
-- ADB (optional, for online capture)
+- ADB (optional, for live mirror + capture)
 
-## Snapshot Format
+## Snapshot format
 
 Each snapshot folder can include:
 
@@ -44,5 +54,9 @@ python src/qa_snapshot_tool/main.py
 
 ## Notes
 
-- Offline mode: Select a snapshot folder or a parent directory to browse snapshots.
-- Online mode (optional): Connect a device and capture a snapshot via ADB.
+- Offline mode: Open any snapshot folder with a dump and screenshot.
+- Online mode (optional): Connect a device and capture snapshots via ADB.
+
+## Screenshot
+
+Place the provided UI screenshot at docs/screenshot.png to render the image in this README.

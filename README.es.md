@@ -1,0 +1,60 @@
+# QUANTUM Inspector (QA Snapshot Inspector)
+
+GUI de escritorio en Python para inspeccionar snapshots Android (volcados UIAutomator + capturas), revisar el estado en vivo del dispositivo y generar localizadores robustos para automatización QA.
+
+![Interfaz de QUANTUM Inspector](docs/screenshot.png)
+
+## Qué hace
+
+- Espejo en vivo por ADB (opcional) para inspeccionar la UI actual en tiempo real.
+- Inspección offline de snapshots guardados.
+- Navegación del árbol de UI con superposición sobre la captura.
+- Panel de inspector con propiedades del nodo (texto, bounds, resource-id, etc.).
+- Sugerencias de localizadores (XPath + formatos Appium Java/Python).
+
+## Requisitos
+
+- Python 3.11+
+- Windows 11 (diseñado para, pero funciona en macOS/Linux)
+- ADB (opcional, para espejo en vivo y captura)
+
+## Formato de snapshot
+
+Cada carpeta de snapshot puede incluir:
+
+- screenshot.png (screencap de ADB)
+- dump.uix (volcado XML de UIAutomator)
+- meta.json (info del dispositivo, actividad en foco, timestamps)
+- logcat.txt (opcional)
+
+Los archivos faltantes se manejan con advertencias.
+
+## Instalación
+
+1) Crear entorno virtual:
+
+```bash
+python -m venv venv
+venv\Scripts\activate
+```
+
+2) Instalar dependencias:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Uso
+
+```bash
+python src/qa_snapshot_tool/main.py
+```
+
+## Notas
+
+- Modo offline: abre cualquier carpeta de snapshot con dump y captura.
+- Modo online (opcional): conecta un dispositivo y captura snapshots por ADB.
+
+## Captura de pantalla
+
+Coloca la imagen en docs/screenshot.png para que se renderice en este README.
