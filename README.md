@@ -16,15 +16,35 @@ V1 PoC (current build).
 - Inspector panel with node properties (text, bounds, resource-id, etc.).
 - Locator suggestions (XPath + Appium Java/Python formats).
 
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Usage guide](docs/USAGE_GUIDE.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [FAQ](FAQ.md)
+- [Draft article (Spanish)](docs/QUANTUM_Article_Final.pdf)
+
+## How it works
+
+1. Load a snapshot folder or start a live mirror session over ADB.
+2. The UIAutomator XML is parsed into a node tree with bounds and attributes.
+3. The screenshot is rendered with hover/selection overlays tied to the node tree.
+4. Selecting a node shows its properties and locator suggestions for automation.
+
+## Architecture at a glance
+
+- **GUI layer (`gui.py`)**: PySide6 window, overlays, tree navigation, inspector panels.
+- **XML parser (`uix_parser.py`)**: converts UIAutomator XML into `UiNode` objects with bounds validation.
+- **Locator engine (`locator_suggester.py`)**: generates scoped, ID, text, and content-desc locators.
+- **ADB integration (`adb_manager.py`, `adb_capture.py`)**: device discovery, snapshot capture, input events.
+- **Live mirror (`live_mirror.py`)**: background threads for video, hierarchy, logcat, and focus updates.
+- **Theme (`theme.py`)**: palette and styling rules.
+
 ## Additional visuals
 
 ![QUANTUM Inspector UI - Example](docs/ui-example.png)
 
 UI_Example: guidance screenshot to explain what each section shows when you open a screen.
-
-## Draft article / documentation
-
-- [QUANTUM_Article_Final.pdf](docs/QUANTUM_Article_Final.pdf) — ongoing documentation/article for the PoC. Spanish only for now.
 
 ## Prerequisites
 
