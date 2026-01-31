@@ -1,8 +1,10 @@
 # QUANTUM Inspector (QA Snapshot Inspector)
 
-A Python desktop GUI to inspect Android UI snapshots (UIAutomator dumps + screenshots), review live device state, and generate robust locators for QA automation.
+A professional-grade Python desktop GUI to inspect Android UI snapshots (UIAutomator dumps + screenshots), review live device state, and generate robust locators for QA automation.
 
-![QUANTUM Inspector UI](docs/screenshot.png)
+Project owner and technical authority: David Erik García Arenas (QA, Paradox Cat).
+
+![QUANTUM Inspector UI - V1 PoC](docs/v1-poc.png)
 
 ## What it does
 
@@ -11,6 +13,18 @@ A Python desktop GUI to inspect Android UI snapshots (UIAutomator dumps + screen
 - UI tree navigation with hover/selection overlay on the screenshot.
 - Inspector panel with node properties (text, bounds, resource-id, etc.).
 - Locator suggestions (XPath + Appium Java/Python formats).
+
+## Additional visuals
+
+![QUANTUM Inspector UI - Example](docs/ui-example.png)
+
+<img src="docs/bernard-tennis.gif" width="120" alt="Bernard tennis easter egg" />
+
+![Bernard tennis (fun)](docs/bernard-tennis.gif)
+
+## Draft article / documentation
+
+- [QUANTUM_Article_Final.pdf](docs/QUANTUM_Article_Final.pdf) — ongoing documentation/article for the PoC. Spanish only for now.
 
 ## Prerequisites
 
@@ -56,6 +70,25 @@ python src/qa_snapshot_tool/main.py
 
 - Offline mode: Open any snapshot folder with a dump and screenshot.
 - Online mode (optional): Connect a device and capture snapshots via ADB.
+
+## Workflow (GitFlow)
+
+This repo follows GitFlow conventions:
+
+- main: stable releases
+- develop: active integration
+- feature/*: new features
+- hotfix/*: urgent fixes on main
+- release/*: pre-release stabilization
+
+## Project files
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md)
+- [FAQ.md](FAQ.md)
+- [CHANGELOG.md](CHANGELOG.md)
+- [LICENSE](LICENSE)
 
 ## Screenshot
 

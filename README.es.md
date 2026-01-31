@@ -1,8 +1,10 @@
 # QUANTUM Inspector (QA Snapshot Inspector)
 
-GUI de escritorio en Python para inspeccionar snapshots Android (volcados UIAutomator + capturas), revisar el estado en vivo del dispositivo y generar localizadores robustos para automatización QA.
+GUI profesional en Python para inspeccionar snapshots Android (volcados UIAutomator + capturas), revisar el estado en vivo del dispositivo y generar localizadores robustos para automatización QA.
 
-![Interfaz de QUANTUM Inspector](docs/screenshot.png)
+Propietario del proyecto y autoridad técnica: David Erik García Arenas (QA, Paradox Cat).
+
+![Interfaz de QUANTUM Inspector - V1 PoC](docs/v1-poc.png)
 
 ## Qué hace
 
@@ -11,6 +13,18 @@ GUI de escritorio en Python para inspeccionar snapshots Android (volcados UIAuto
 - Navegación del árbol de UI con superposición sobre la captura.
 - Panel de inspector con propiedades del nodo (texto, bounds, resource-id, etc.).
 - Sugerencias de localizadores (XPath + formatos Appium Java/Python).
+
+## Visuales adicionales
+
+![Interfaz de QUANTUM Inspector - Ejemplo](docs/ui-example.png)
+
+<img src="docs/bernard-tennis.gif" width="120" alt="Bernard tenis (easter egg)" />
+
+![Bernard tenis (diversión)](docs/bernard-tennis.gif)
+
+## Artículo / documentación (borrador)
+
+- [QUANTUM_Article_Final.pdf](docs/QUANTUM_Article_Final.pdf) — documentación/artículo en evolución del PoC. Solo en español por ahora.
 
 ## Requisitos
 
@@ -54,6 +68,25 @@ python src/qa_snapshot_tool/main.py
 
 - Modo offline: abre cualquier carpeta de snapshot con dump y captura.
 - Modo online (opcional): conecta un dispositivo y captura snapshots por ADB.
+
+## Flujo de trabajo (GitFlow)
+
+Este repo sigue GitFlow:
+
+- main: releases estables
+- develop: integración activa
+- feature/*: nuevas funcionalidades
+- hotfix/*: fixes urgentes en main
+- release/*: estabilización previa al release
+
+## Archivos del proyecto
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [SECURITY.md](SECURITY.md)
+- [FAQ.md](FAQ.md)
+- [CHANGELOG.md](CHANGELOG.md)
+- [LICENSE](LICENSE)
 
 ## Captura de pantalla
 
