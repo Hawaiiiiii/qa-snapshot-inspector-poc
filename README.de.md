@@ -6,6 +6,8 @@ Projektinhaber und technische Autorität: David Erik García Arenas (QA, Paradox
 
 ![QUANTUM Inspector UI - V1 PoC](docs/v1-poc.png)
 
+V1 PoC (aktueller Build).
+
 ## Was es macht
 
 - Live-Mirror via ADB (optional) zur Echtzeit-Inspektion der UI.
@@ -18,9 +20,7 @@ Projektinhaber und technische Autorität: David Erik García Arenas (QA, Paradox
 
 ![QUANTUM Inspector UI - Beispiel](docs/ui-example.png)
 
-<img src="docs/bernard-tennis.gif" width="120" alt="Bernard Tennis (Easter Egg)" />
-
-![Bernard Tennis (spaß)](docs/bernard-tennis.gif)
+UI_Example: Hinweis-Screenshot zur Erklärung der Bereiche beim Öffnen eines Screens.
 
 ## Artikel / Dokumentation (Entwurf)
 
@@ -88,6 +88,4 @@ Dieses Repo folgt GitFlow:
 - [CHANGELOG.md](CHANGELOG.md)
 - [LICENSE](LICENSE)
 
-## Screenshot
-
-Lege das Bild unter docs/screenshot.png ab, damit es im README angezeigt wird.
+<img src="docs/bernard-tennis.gif" width="120" alt="Bernard Tennis (Easter Egg)" />

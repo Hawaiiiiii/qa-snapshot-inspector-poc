@@ -6,6 +6,8 @@ Propietario del proyecto y autoridad técnica: David Erik García Arenas (QA, Pa
 
 ![Interfaz de QUANTUM Inspector - V1 PoC](docs/v1-poc.png)
 
+V1 PoC (build actual).
+
 ## Qué hace
 
 - Espejo en vivo por ADB (opcional) para inspeccionar la UI actual en tiempo real.
@@ -18,9 +20,7 @@ Propietario del proyecto y autoridad técnica: David Erik García Arenas (QA, Pa
 
 ![Interfaz de QUANTUM Inspector - Ejemplo](docs/ui-example.png)
 
-<img src="docs/bernard-tennis.gif" width="120" alt="Bernard tenis (easter egg)" />
-
-![Bernard tenis (diversión)](docs/bernard-tennis.gif)
+UI_Example: captura guía para explicar qué muestra cada sección al abrir una pantalla.
 
 ## Artículo / documentación (borrador)
 
@@ -88,6 +88,4 @@ Este repo sigue GitFlow:
 - [CHANGELOG.md](CHANGELOG.md)
 - [LICENSE](LICENSE)
 
-## Captura de pantalla
-
-Coloca la imagen en docs/screenshot.png para que se renderice en este README.
+<img src="docs/bernard-tennis.gif" width="120" alt="Bernard tenis (easter egg)" />
