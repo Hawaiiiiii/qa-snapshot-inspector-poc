@@ -24,6 +24,9 @@ dependencies = [
     "PySide6>=6.6.0",
 ]
 
+[project.scripts]
+qa-inspector = "qa_snapshot_tool.main:main"
+
 [project.urls]
 "Homepage" = "https://github.com/Hawaiiiiii/qa-snapshot-inspector-poc"
 "Bug Tracker" = "https://github.com/Hawaiiiiii/qa-snapshot-inspector-poc/issues"

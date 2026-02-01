@@ -13,7 +13,7 @@ import hashlib
 import time
 import subprocess
 from typing import Optional
-from .adb_manager import AdbManager
+from qa_snapshot_tool.adb_manager import AdbManager
 
 class VideoThread(QThread):
     """ 
@@ -102,11 +102,11 @@ class LogcatThread(QThread):
         # Start streaming
         cmd = ['adb', '-s', self.serial, 'logcat', '-v', 'time']
         self.proc = subprocess.Popen(
-            cmd, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, 
-            text=True, 
-            encoding='utf-8', 
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
             errors='replace'
         )
         

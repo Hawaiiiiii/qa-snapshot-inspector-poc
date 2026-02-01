@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "QA Snapshot Inspector",
+      "type": "python",
+      "request": "launch",
+      "module": "qa_snapshot_tool.main",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

@@ -7,7 +7,7 @@ that rely on stable parent anchors.
 """
 
 from typing import List, Dict, Optional, Any, Union
-from .uix_parser import UiNode
+from qa_snapshot_tool.uix_parser import UiNode
 
 class LocatorUtils:
     """Utility functions for string escaping in XPath."""

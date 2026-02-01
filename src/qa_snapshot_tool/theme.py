@@ -11,15 +11,24 @@ class Theme:
     """
     Static container for UI theme constants and stylesheet generation.
     """
+
+    FONT_FAMILY: str = "BMW Type Next"
+    FONT_FALLBACK: str = "Segoe UI"
     
     # Colors
     BMW_BLUE: str = "#1c69d4"
-    BMW_BLUE_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2d7dec, stop:1 #1c69d4)"
+    BMW_BLUE_HIGHLIGHT: str = "#2d7dec"
+    BMW_BLUE_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0f4aa0, stop:0.55 #1c69d4, stop:1 #2d7dec)"
+
+    PARADOX_PINK: str = "#ff2d95"
+    PARADOX_PURPLE: str = "#7a2cff"
+    PARADOX_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff2d95, stop:0.55 #b030ff, stop:1 #7a2cff)"
     
-    BG_DARK: str = "#1e1e1e"
-    BG_PANEL: str = "#252526"
-    BG_HEADER: str = "#2d2d30"
-    BORDER: str = "#3e3e42"
+    BG_DARK: str = "#101317"
+    BG_PANEL: str = "#161a20"
+    BG_HEADER: str = "#1a1f27"
+    BG_ELEVATED: str = "#1f2530"
+    BORDER: str = "#2b3442"
     
     TEXT_WHITE: str = "#f0f0f0"
     TEXT_GRAY: str = "#cccccc"
@@ -34,19 +43,26 @@ class Theme:
     HOVER_OVERLAY: str = "rgba(255, 255, 255, 30)"
 
     @staticmethod
-    def get_stylesheet() -> str:
+    def get_stylesheet(ambient_overlay: str = "") -> str:
         """
         Returns the global QSS stylesheet for the application.
         """
         return f"""
         QMainWindow {{
-            background-color: {Theme.BG_DARK};
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b0f14, stop:0.6 #121722, stop:1 #10131a);
+            {ambient_overlay}
         }}
         
         QWidget {{
             color: {Theme.TEXT_WHITE};
-            font-family: 'Segoe UI', sans-serif;
-            font-size: 13px;
+            font-family: '{Theme.FONT_FAMILY}', '{Theme.FONT_FALLBACK}', sans-serif;
+            font-size: 10pt;
+        }}
+
+        QToolBar {{
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10151d, stop:0.6 #151b26, stop:1 #111722);
+            border-bottom: 1px solid {Theme.BORDER};
+            spacing: 12px;
         }}
         
         /* Docks */
@@ -61,6 +77,11 @@ class Theme:
             padding-top: 4px;
             padding-bottom: 4px; 
             border-bottom: 1px solid {Theme.BORDER};
+        }}
+
+        QDockWidget::title::text {{
+            color: {Theme.TEXT_GRAY};
+            font-weight: 600;
         }}
 
         /* Scrollbars */
@@ -99,39 +120,44 @@ class Theme:
 
         /* Buttons */
         QPushButton {{
-            background-color: {Theme.BG_HEADER};
+            background-color: {Theme.BG_ELEVATED};
             border: 1px solid {Theme.BORDER};
-            padding: 6px 12px;
-            border-radius: 3px;
+            padding: 7px 12px;
+            border-radius: 6px;
         }}
         QPushButton:hover {{
-            background-color: #3e3e42;
+            background-color: #2a3342;
         }}
         QPushButton:pressed {{
-            background-color: #0e639c; /* VSCode Blue */
-            border-color: #0e639c;
+            background-color: {Theme.BMW_BLUE};
+            border-color: {Theme.BMW_BLUE};
             color: white;
         }}
         
         /* Header specific buttons */
-        QPushButton#primaryBtn {{
+        QPushButton[class="primary"] {{
             background: {Theme.BMW_BLUE_GRADIENT};
             border: 1px solid #1055b3;
-            font-weight: bold;
+            font-weight: 600;
         }}
-        QPushButton#primaryBtn:hover {{
-            background: #2d7dec;
+        QPushButton[class="primary"]:hover {{
+            background: {Theme.BMW_BLUE_HIGHLIGHT};
+        }}
+        QPushButton[class="accent"] {{
+            background: {Theme.PARADOX_GRADIENT};
+            border: 1px solid #6a1fd4;
+            font-weight: 600;
         }}
         
-        QPushButton#dangerBtn {{
+        QPushButton[class="danger"] {{
             background: {Theme.ACCENT_RED_GRADIENT};
             border: 1px solid #b71c1c;
-            font-weight: bold;
+            font-weight: 600;
         }}
 
         /* Inputs */
         QLineEdit, QTextEdit {{
-            background-color: #3c3c3c;
+            background-color: #1b2028;
             border: 1px solid {Theme.BORDER};
             padding: 4px;
             color: {Theme.TEXT_WHITE};
@@ -156,5 +182,41 @@ class Theme:
         }}
         QLabel#infoLabel {{
             color: {Theme.TEXT_GRAY};
+        }}
+
+        QGroupBox {{
+            border: 1px solid {Theme.BORDER};
+            margin-top: 10px;
+            border-radius: 6px;
+            background: {Theme.BG_PANEL};
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 10px;
+            padding: 0 4px 0 4px;
+            color: {Theme.TEXT_GRAY};
+        }}
+
+        QTabWidget::pane {{
+            border: 1px solid {Theme.BORDER};
+            background: {Theme.BG_PANEL};
+        }}
+        QTabBar::tab {{
+            background: {Theme.BG_HEADER};
+            padding: 6px 12px;
+            margin-right: 2px;
+            border: 1px solid {Theme.BORDER};
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+        }}
+        QTabBar::tab:selected {{
+            background: {Theme.BG_ELEVATED};
+            border-bottom-color: {Theme.BG_ELEVATED};
+        }}
+
+        QHeaderView::section {{
+            background: {Theme.BG_HEADER};
+            border: 1px solid {Theme.BORDER};
+            padding: 4px;
         }}
         """

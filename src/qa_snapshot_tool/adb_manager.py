@@ -8,6 +8,8 @@ dumps, and logcat retrieval with error handling and platform-specific adjustment
 
 import subprocess
 import os
+import json
+import time
 from typing import List, Dict, Optional, Any
 
 class AdbManager:
@@ -97,6 +99,51 @@ class AdbManager:
             return devices
         except Exception: 
             return []
+
+    @staticmethod
+    def connect_ip(address: str) -> str:
+        res = AdbManager._run_cmd(['adb', 'connect', address], timeout=10)
+        return (res.stdout or res.stderr).strip()
+
+    @staticmethod
+    def disconnect_ip(address: str) -> str:
+        res = AdbManager._run_cmd(['adb', 'disconnect', address], timeout=10)
+        return (res.stdout or res.stderr).strip()
+
+    @staticmethod
+    def _history_path() -> str:
+        base = os.path.join(os.path.expanduser("~"), ".qa_snapshot_tool")
+        if not os.path.exists(base):
+            os.makedirs(base, exist_ok=True)
+        return os.path.join(base, "device_history.json")
+
+    @staticmethod
+    def load_device_history() -> List[Dict[str, str]]:
+        path = AdbManager._history_path()
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return data
+        except Exception:
+            return []
+        return []
+
+    @staticmethod
+    def save_device_history(entries: List[Dict[str, str]]) -> None:
+        path = AdbManager._history_path()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2)
+
+    @staticmethod
+    def record_device(serial: str, model: str) -> None:
+        entries = AdbManager.load_device_history()
+        now = str(int(time.time()))
+        updated = [e for e in entries if e.get("serial") != serial]
+        updated.insert(0, {"serial": serial, "model": model, "last_seen": now})
+        AdbManager.save_device_history(updated[:20])
 
     @staticmethod
     def get_screenshot_bytes(serial: str) -> Optional[bytes]:

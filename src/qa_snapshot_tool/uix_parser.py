@@ -105,6 +105,35 @@ class UixParser:
     """
 
     @staticmethod
+    def _sanitize_xml(raw: str) -> str:
+        """
+        Attempts to trim junk before/after the XML root and recover valid hierarchy blocks.
+        """
+        if not raw:
+            return raw
+
+        text = raw.strip()
+
+        # Remove leading garbage before first '<'
+        first_tag = text.find("<")
+        if first_tag > 0:
+            text = text[first_tag:]
+
+        # Prefer a complete <hierarchy> block if present
+        start = text.find("<hierarchy")
+        end = text.rfind("</hierarchy>")
+        if start != -1 and end != -1 and end > start:
+            return text[start:end + len("</hierarchy>")]
+
+        # Fallback: wrap a <node> root in <hierarchy>
+        start = text.find("<node")
+        end = text.rfind("</node>")
+        if start != -1 and end != -1 and end > start:
+            return f"<hierarchy>{text[start:end + len('</node>')]}</hierarchy>"
+
+        return text
+
+    @staticmethod
     def parse(source: Union[str, bytes]) -> Tuple[Optional[UiNode], bool]:
         """
         Parses an XML source (string, bytes, or file path) into a UiNode tree.
@@ -125,7 +154,8 @@ class UixParser:
                 if isinstance(source, bytes): 
                     source = source.decode('utf-8', errors='replace')
                 # Remove XML declaration if present to avoid encoding issues
-                source = re.sub(r'<\?xml.*?\?>', '', source) 
+                source = re.sub(r'<\?xml.*?\?>', '', source)
+                source = UixParser._sanitize_xml(source)
                 root_element = ET.fromstring(source)
             else:
                 # Assume it's a file path

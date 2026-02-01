@@ -10,3 +10,6 @@ snap_*/
 temp_live.uix
 devices.json
 .pytest_cache/
+.vscode/*
+!.vscode/launch.json
+src/qa_snapshot_inspector.egg-info/
