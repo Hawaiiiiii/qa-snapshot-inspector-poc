@@ -1,3 +1,13 @@
+﻿"""
+Main GUI Module.
+
+This module implements the MainWindow class, which is the central hub of the desktop application.
+It orchestrates the various docks, views, and controllers, including:
+- Screenshot visualization (QGraphicsView)
+- Hierarchy tree (QTreeWidget)
+- Node property inspection
+- Device control and snapshot capture
+"""
 import os
 import glob
 import time
@@ -182,7 +192,7 @@ class MainWindow(QMainWindow):
         gb_live = QGroupBox("Live Mirror"); ll = QVBoxLayout()
         self.btn_live = QPushButton(" START LIVE STREAM"); self.btn_live.setProperty("class", "primary")
         self.btn_live.clicked.connect(self.toggle_live)
-        self.chk_turbo = QLabel("ℹ️ Optimized"); self.chk_turbo.setStyleSheet("color: #666; font-size: 8pt;")
+        self.chk_turbo = QLabel("â„¹ï¸ Optimized"); self.chk_turbo.setStyleSheet("color: #666; font-size: 8pt;")
         ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo)
         gb_live.setLayout(ll); l.addWidget(gb_live)
         
@@ -381,7 +391,7 @@ class MainWindow(QMainWindow):
             else:
                 code = xpath
                 
-            icon = "🌟" if s['type'].startswith("Scoped") else "🔹"
+            icon = "ðŸŒŸ" if s['type'].startswith("Scoped") else "ðŸ”¹"
             out += f"{icon} {s['type']}\n{code}\n\n"
             
         self.txt_loc.setText(out)

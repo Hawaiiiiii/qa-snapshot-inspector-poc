@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qa-snapshot-inspector"
+version = "1.0.0"
+description = "A professional-grade Python desktop GUI to inspect Android UI snapshots."
+readme = "README.md"
+authors = [
+  { name = "David Erik García Arenas", email = "daviderikgarciaarenas@gmail.com" },
+]
+license = { file = "LICENSE" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+]
+keywords = ["android", "adb", "qa", "automation", "testing", "gui", "snapshot"]
+requires-python = ">=3.9"
+dependencies = [
+    "PySide6>=6.6.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Hawaiiiiii/qa-snapshot-inspector-poc"
+"Bug Tracker" = "https://github.com/Hawaiiiiii/qa-snapshot-inspector-poc/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "mypy>=1.0",
+    "black>=23.0",
+    "flake8>=6.0",
+    "types-setuptools",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false 
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

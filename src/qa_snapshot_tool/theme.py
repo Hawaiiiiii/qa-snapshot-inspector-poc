@@ -1,98 +1,160 @@
+﻿"""
+Application Theme Module.
+
+Defines the color palette, fonts, and QSS style sheets used throughout the application.
+Designed for a modern "Dark Mode" aesthetic similar to VS Code or JetBrains IDEs.
+"""
+
 from PySide6.QtGui import QColor
 
 class Theme:
+    """
+    Static container for UI theme constants and stylesheet generation.
+    """
+    
     # Colors
-    BMW_BLUE = "#1c69d4"
-    BMW_BLUE_GRADIENT = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2d7dec, stop:1 #1c69d4)"
+    BMW_BLUE: str = "#1c69d4"
+    BMW_BLUE_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2d7dec, stop:1 #1c69d4)"
     
-    BG_DARK = "#1e1e1e"
-    BG_PANEL = "#252526"
-    BG_HEADER = "#2d2d30"
-    BORDER = "#3e3e42"
+    BG_DARK: str = "#1e1e1e"
+    BG_PANEL: str = "#252526"
+    BG_HEADER: str = "#2d2d30"
+    BORDER: str = "#3e3e42"
     
-    TEXT_WHITE = "#f0f0f0"
-    TEXT_GRAY = "#cccccc"
+    TEXT_WHITE: str = "#f0f0f0"
+    TEXT_GRAY: str = "#cccccc"
     
-    ACCENT_RED = "#d32f2f"
-    ACCENT_RED_GRADIENT = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff5252, stop:1 #d32f2f)"
+    ACCENT_RED: str = "#d32f2f"
+    ACCENT_RED_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff5252, stop:1 #d32f2f)"
     
-    ACCENT_GREEN = "#388e3c"
-    ACCENT_YELLOW = "#fbc02d"
+    ACCENT_GREEN: str = "#388e3c"
+    ACCENT_YELLOW: str = "#fbc02d"
 
-    FONT_FAMILY = "Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+    SELECTION_OVERLAY: str = "rgba(255, 0, 0, 80)"
+    HOVER_OVERLAY: str = "rgba(255, 255, 255, 30)"
 
     @staticmethod
-    def get_stylesheet():
+    def get_stylesheet() -> str:
+        """
+        Returns the global QSS stylesheet for the application.
+        """
         return f"""
-        QMainWindow {{ background-color: {Theme.BG_DARK}; color: {Theme.TEXT_WHITE}; }}
-        QWidget {{ font-family: "{Theme.FONT_FAMILY}"; font-size: 9pt; color: {Theme.TEXT_WHITE}; }}
+        QMainWindow {{
+            background-color: {Theme.BG_DARK};
+        }}
         
-        QToolTip {{ 
-            background-color: {Theme.BG_HEADER}; 
-            color: {Theme.TEXT_WHITE}; 
-            border: 1px solid {Theme.BMW_BLUE}; 
-            padding: 5px;
+        QWidget {{
+            color: {Theme.TEXT_WHITE};
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+        }}
+        
+        /* Docks */
+        QDockWidget {{
+            titlebar-close-icon: url(close.png);
+            titlebar-normal-icon: url(float.png);
+        }}
+        
+        QDockWidget::title {{
+            background: {Theme.BG_HEADER};
+            padding-left: 5px;
+            padding-top: 4px;
+            padding-bottom: 4px; 
+            border-bottom: 1px solid {Theme.BORDER};
         }}
 
-        /* Dock & Panels */
-        QDockWidget::title {{ background: {Theme.BG_HEADER}; padding: 6px; border-bottom: 2px solid {Theme.BORDER}; }}
-        QGroupBox {{ border: 1px solid {Theme.BORDER}; margin-top: 1.5em; background-color: {Theme.BG_PANEL}; border-radius: 4px; }}
-        QGroupBox::title {{ subcontrol-origin: margin; padding: 0 5px; color: {Theme.BMW_BLUE}; font-weight: bold; }}
+        /* Scrollbars */
+        QScrollBar:vertical {{
+            border: none;
+            background: {Theme.BG_DARK};
+            width: 10px;
+            margin: 0px 0px 0px 0px;
+        }}
+        QScrollBar::handle:vertical {{
+            background: #424242;
+            min-height: 20px;
+            border-radius: 5px;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+            border: none;
+            background: none;
+        }}
+        
+        /* Lists & Trees */
+        QTreeWidget, QListWidget {{
+            background-color: {Theme.BG_PANEL};
+            border: 1px solid {Theme.BORDER};
+            outline: none;
+        }}
+        QTreeWidget::item, QListWidget::item {{
+            padding: 4px;
+        }}
+        QTreeWidget::item:selected, QListWidget::item:selected {{
+            background-color: #37373d;
+            color: white;
+        }}
+        QTreeWidget::item:hover, QListWidget::item:hover {{
+            background-color: #2a2d2e;
+        }}
 
-        /* Buttons with Gradients */
+        /* Buttons */
         QPushButton {{
             background-color: {Theme.BG_HEADER};
             border: 1px solid {Theme.BORDER};
             padding: 6px 12px;
             border-radius: 3px;
         }}
-        QPushButton:hover {{ background-color: {Theme.BORDER}; }}
-        QPushButton:pressed {{ background-color: {Theme.BG_DARK}; }}
+        QPushButton:hover {{
+            background-color: #3e3e42;
+        }}
+        QPushButton:pressed {{
+            background-color: #0e639c; /* VSCode Blue */
+            border-color: #0e639c;
+            color: white;
+        }}
         
-        QPushButton[class="primary"] {{
+        /* Header specific buttons */
+        QPushButton#primaryBtn {{
             background: {Theme.BMW_BLUE_GRADIENT};
-            border: 1px solid {Theme.BMW_BLUE};
+            border: 1px solid #1055b3;
             font-weight: bold;
         }}
-        QPushButton[class="primary"]:hover {{ background-color: {Theme.BMW_BLUE}; }}
+        QPushButton#primaryBtn:hover {{
+            background: #2d7dec;
+        }}
         
-        QPushButton[class="danger"] {{
+        QPushButton#dangerBtn {{
             background: {Theme.ACCENT_RED_GRADIENT};
-            border: 1px solid {Theme.ACCENT_RED};
+            border: 1px solid #b71c1c;
             font-weight: bold;
         }}
 
-        /* Input Fields */
-        QComboBox, QLineEdit, QTextEdit, QTableWidget, QTreeWidget {{
-            background-color: #2d2d30;
+        /* Inputs */
+        QLineEdit, QTextEdit {{
+            background-color: #3c3c3c;
             border: 1px solid {Theme.BORDER};
-            color: {Theme.TEXT_WHITE};
-            selection-background-color: {Theme.BMW_BLUE};
-        }}
-        
-        QHeaderView::section {{
-            background-color: {Theme.BG_HEADER};
             padding: 4px;
-            border: none;
-            border-right: 1px solid {Theme.BORDER};
-            border-bottom: 1px solid {Theme.BORDER};
+            color: {Theme.TEXT_WHITE};
+        }}
+        QLineEdit:focus, QTextEdit:focus {{
+            border: 1px solid {Theme.BMW_BLUE};
         }}
         
-        QTabWidget::pane {{ border: 1px solid {Theme.BORDER}; }}
-        QTabBar::tab {{
-            background: {Theme.BG_HEADER};
-            padding: 8px 16px;
-            border: 1px solid {Theme.BORDER};
-            margin-right: 2px;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-        }}
-        QTabBar::tab:selected {{
-            background: {Theme.BG_PANEL};
-            border-bottom: 2px solid {Theme.BMW_BLUE};
-            color: {Theme.BMW_BLUE};
+        /* Labels */
+        QLabel#h1 {{
+            font-size: 16px;
             font-weight: bold;
+            color: {Theme.TEXT_WHITE};
+            margin-bottom: 8px;
         }}
-        
-        QStatusBar {{ background: {Theme.BG_HEADER}; color: {Theme.TEXT_GRAY}; }}
+        QLabel#h2 {{
+            font-size: 12px;
+            font-weight: bold;
+            color: {Theme.TEXT_GRAY};
+            margin-top: 10px;
+            margin-bottom: 4px;
+        }}
+        QLabel#infoLabel {{
+            color: {Theme.TEXT_GRAY};
+        }}
         """

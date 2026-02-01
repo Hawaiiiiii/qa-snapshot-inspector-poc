@@ -9,3 +9,4 @@ snap_qa-snapshot-inspector-poc.zip
 snap_*/
 temp_live.uix
 devices.json
+.pytest_cache/
