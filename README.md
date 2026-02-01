@@ -16,6 +16,12 @@ V1 PoC (current build).
 - Inspector panel with node properties (text, bounds, resource-id, etc.).
 - Locator suggestions (XPath + Appium Java/Python formats).
 
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Usage Guide](docs/USAGE_GUIDE.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+
 ## Additional visuals
 
 ![QUANTUM Inspector UI - Example](docs/ui-example.png)
@@ -88,6 +94,7 @@ This repo follows GitFlow conventions:
 - [SECURITY.md](SECURITY.md)
 - [FAQ.md](FAQ.md)
 - [CHANGELOG.md](CHANGELOG.md)
+- [ROADMAP.md](ROADMAP.md)
 - [LICENSE](LICENSE)
 
 <img src="docs/bernard-tennis.gif" width="120" alt="Bernard tennis easter egg" />
