@@ -1,40 +1,43 @@
-# Usage Guide
+﻿# User guide
 
-## Run the app
+From zero to hero: how to use QUANTUM Inspector to debug your apps.
 
+## Prerequisites (getting ready)
+
+Before you launch the app, make sure you have:
+1.  **USB debugging enabled**: On your phone, go to **Settings -> Developer options** and enable **USB debugging**.
+2.  **Connection**: Plug your phone into your PC via USB. (Accept "Trust this computer" on your phone screen if prompted).
+
+## Step 1: Launching the app
+
+Open your terminal in the project folder and run:
 ```bash
 python src/qa_snapshot_tool/main.py
 ```
+You will see the dark-themed interface appear.
 
-## Offline inspection
+## Step 2: Selecting your device
 
-1. Click **Load Offline Dump...**
-2. Select a snapshot folder containing `screenshot.png` and `dump.uix`.
-3. Hover the image to highlight nodes.
-4. Click to lock selection and inspect properties.
-5. Use **Smart Locators** to copy suggested XPath/Appium selectors.
+In the top left corner of the app:
+*   **Device list**: You should see your device ID here.
+*   **If it works**: Great!
+*   **If it is empty**: Click the **Refresh** button. If it is still empty, check your USB cable.
 
-## Live mirror (optional)
+## Step 3: Taking a snapshot (the magic moment)
 
-1. Connect the target device via ADB.
-2. Click **LIVE MODE**.
-3. Interact with the live mirror and observe UI updates.
-4. Use **Capture Snapshot** to store the current state.
+1.  Pick up your phone and navigate to the screen you want to capture (e.g., a bug where the login button is broken).
+2.  In the app, click the big **"Capture snapshot"** button.
+3.  Wait a few seconds... (The tool is downloading the image and data).
+4.  **Done!** Your phone screen will appear in the main window.
 
-## Snapshot capture format
+## Step 4: Investigating elements
 
-Snapshots are stored as:
+This is where you find the hidden details.
+*   **Hover**: Move your mouse over the screenshot. Red boxes will light up to show you what the phone "thinks" are clickable items.
+*   **Click**: Detailed properties will appear in the **Right panel**.
+*   **Copy code**: Need to write an automated test? Look at the **Locator suggestions** box. We act as a "consultant" and give you the best XPath or ID to use.
 
-```
-snap_<timestamp>/
-  screenshot.png
-  dump.uix
-  meta.json
-  logcat.txt
-```
+## Pro tips
 
-## Tips
-
-- Use **Fit Screen** for large or unusual aspect ratios.
-- Use the UI tree panel to navigate dense hierarchies quickly.
-- Prefer resource-id + class selectors when available.
+*   **Offline mode**: You don't need a phone connected to view old snapshots! Just use **File -> Load snapshot** and pick any `snap_...` folder from before.
+*   **Logcat**: Every timestamped folder also contains a `logcat.txt`. Give this to your developers; they will love you for it.

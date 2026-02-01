@@ -1,46 +1,56 @@
-# Architecture
+﻿# How It Works (architecture)
 
-QUANTUM Inspector is a PySide6 desktop application that combines ADB‑driven capture with offline snapshot inspection and locator generation.
+> "Think of this tool as an X-Ray machine for your mobile applications."
 
-## High-level flow
+This document explains the inner workings of the **QUANTUM Inspector** in plain English. You don't need a PhD in Computer Science to understand how we turn your phone screen into a debuggable playground.
 
-1. **Capture or load** a snapshot (screenshot + UIAutomator XML).
-2. **Parse** XML into a UI tree of nodes with bounds.
-3. **Render** screenshot and overlay UI elements for selection.
-4. **Inspect** node properties and generate locator suggestions.
+## The big picture
 
-## Modules
+The application acts as a bridge between your **Android Device** and your **Desktop**.
 
-- **main.py**: App entry point, theme setup, window bootstrap.
-- **gui.py**: Main window, docks, graphics view, and UI event routing.
-- **adb_manager.py**: ADB device discovery, screencap, UI dump, logcat, and snapshot packaging.
-- **live_mirror.py**: Live capture loop (optional) and frame delivery.
-- **uix_parser.py**: XML parsing into `UiNode` objects + bounds validation.
-- **locator_suggester.py**: Generates XPath/Appium locator suggestions.
-- **theme.py**: UI theme tokens and stylesheet.
+1.  **The fetch**: We reach out to your phone (via a cable or Wi-Fi known as ADB) and grab two things:
+    *   **The picture**: A visual screenshot of what you see.
+    *   **The blueprint**: A hidden file called a "UI Dump" (XML) that lists every button, label, and image on the screen, along with its exact coordinates.
+2.  **The processing**: We take that Blueprint, clean it up (because sometimes Android gives us messy data), and map it directly onto the Picture.
+3.  **The interaction**: When you click on the image in our app, you aren't just clicking pixels; you are clicking the *blueprint*. This lets us tell you exactly what that button is called, its ID, and how to find it with automation tools.
 
-## Snapshot format
+## Key components (the "engine room")
 
-Each snapshot directory may contain:
+Here is a breakdown of the main files you'll find in `src/qa_snapshot_tool/` and what they do:
 
-- `screenshot.png` — ADB screencap
-- `dump.uix` — UIAutomator XML dump
-- `meta.json` — device info, focused activity, timestamps
-- `logcat.txt` — optional logs
+### 1. The brain (`main.py` & `gui.py`)
+*   **What it does:** This is the window you see. It handles your mouse clicks, the dark mode theme, and the layout of the panels.
+*   **Ideally:** It shouldn't know *how* to talk to phones, just how to show you the results.
 
-## Data model
+### 2. The messenger (`adb_manager.py`)
+*   **What it does:** This is our translator. It speaks "Android Debug Bridge" (ADB). It runs commands like "Take a screenshot now" or "Tell me the device name".
+*   **Why it matters:** Without this, the app is blind. It handles the gritty details of usb connections.
 
-- **UiNode** (from `uix_parser.py`):
-  - attributes: class, resource-id, text, content-desc, package
-  - bounds: `x`, `y`, `w`, `h`
-  - flags: clickable, enabled, focused, selected, etc.
+### 3. The translator (`uix_parser.py`)
+*   **What it does:** Android describes screens in a format called XML. It's often deeply nested and complex. This parser reads that raw text and turns it into simple Python objects (`UiNode`) that represent things like "Submit Button" or "Header Text".
+*   **Special Power:** It also fixes errors! Sometimes Android reports buttons with negative width (impossible!) or coordinates off-screen. This component sanitizes that data so the app doesn't crash.
 
-## Locator strategy
+### 4. The strategist (`locator_suggester.py`)
+*   **What it does:** This is the "QA" part of the tool. When you select an element, this calculator looks at it and thinks: *"If I wanted to find this button again tomorrow, how would I describe it?"*
+*   **Result:** It generates code snippets (XPaths, IDs) that you can copy-paste into your test automation scripts (Appium, Selenium, etc.).
 
-Locator suggestions are produced from a node’s attributes and its position in the hierarchy, targeting:
+## The snapshot "package"
 
-- XPath (generic)
-- Appium Java
-- Appium Python
+When you save a snapshot, we create a folder specifically for that moment in time. It contains:
 
-The goal is stable, scoped selectors with minimal false positives.
+*    `screenshot.png`: The visual reference.
+*    `dump.uix`: The raw structure data.
+*    `logcat.txt`: (Optional) The system logs from the device at that moment - great for seeing *why* an app crashed.
+*    `meta.json`: Details like "Google Pixel 6, Android 13, captured at 10:43 AM".
+
+## Data flow diagram
+
+```mermaid
+graph TD
+    Device[Android Phone] -->|ADB Connection| Manager[ADB Manager]
+    Manager -->|Image| GUI[Visual Interface]
+    Manager -->|XML Data| Parser[UIX Parser]
+    Parser -->|Cleaned Nodes| GUI
+    GUI -->|User Selection| Suggester[Locator Suggester]
+    Suggester -->|Code Snippet| Clipboard[Your Code Editor]
+```
