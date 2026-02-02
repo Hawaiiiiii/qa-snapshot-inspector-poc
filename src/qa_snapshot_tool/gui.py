@@ -13,12 +13,13 @@ import glob
 import time
 import json
 import math
+import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTreeWidget, QTreeWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QFileDialog, QTextEdit,
     QGroupBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication, QLineEdit, QCheckBox
+    QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication, QLineEdit, QCheckBox, QMessageBox
 )
 from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor, QLinearGradient, QPalette
 from PySide6.QtCore import QUrl
@@ -28,7 +29,7 @@ from PySide6.QtCore import Qt, QRectF, Signal, QTimer
 from qa_snapshot_tool.uix_parser import UixParser
 from qa_snapshot_tool.locator_suggester import LocatorSuggester
 from qa_snapshot_tool.adb_manager import AdbManager
-from qa_snapshot_tool.live_mirror import VideoThread, HierarchyThread, LogcatThread, FocusMonitorThread
+from qa_snapshot_tool.live_mirror import VideoThread, ScrcpyVideoSource, HierarchyThread, LogcatThread, FocusMonitorThread
 from qa_snapshot_tool.theme import Theme
 
 class SmartGraphicsView(QGraphicsView):
@@ -184,6 +185,10 @@ class MainWindow(QMainWindow):
         self.stream_scale = 1.0
         self.dump_bounds = None
         self.last_frame_size = None
+        self.last_frame_image = None
+        self.live_source = "ADB"
+        self.scrcpy_path = ""
+        self.scrcpy_repo_path = str(Path(__file__).resolve().parents[2] / "scrcpy-3.3.4" / "scrcpy-3.3.4")
         
         self.setup_ui()
         self.refresh_devices()
@@ -299,6 +304,36 @@ class MainWindow(QMainWindow):
         self.chk_turbo = QLabel("Optimized"); self.chk_turbo.setStyleSheet("color: #8aa1c1; font-size: 9pt;")
         self.btn_live.setToolTip("Start or stop live mirroring and control input.")
 
+        src_row = QHBoxLayout()
+        lbl_src = QLabel("Video Source")
+        self.combo_live_source = QComboBox()
+        self.combo_live_source.addItems(["Scrcpy (fast)", "ADB (compat)"])
+        self.combo_live_source.setToolTip("Select the live video backend.")
+        src_row.addWidget(lbl_src); src_row.addWidget(self.combo_live_source)
+
+        scrcpy_row = QHBoxLayout()
+        lbl_scrcpy = QLabel("Scrcpy Exe")
+        self.input_scrcpy = QLineEdit()
+        self.input_scrcpy.setPlaceholderText("Auto-detect from PATH")
+        self.input_scrcpy.setToolTip("Optional path to scrcpy.exe (preferred over PATH).")
+        self.btn_scrcpy = QPushButton("Browse")
+        self.btn_scrcpy.clicked.connect(self.browse_scrcpy)
+        scrcpy_row.addWidget(lbl_scrcpy); scrcpy_row.addWidget(self.input_scrcpy); scrcpy_row.addWidget(self.btn_scrcpy)
+
+        default_scrcpy = self.find_scrcpy_binary()
+        if default_scrcpy:
+            self.input_scrcpy.setText(default_scrcpy)
+            self.scrcpy_path = default_scrcpy
+
+        self.chk_scrcpy_auto = QCheckBox("Auto-update scrcpy (git pull)")
+        self.chk_scrcpy_auto.setChecked(False)
+        self.chk_scrcpy_auto.setToolTip("If scrcpy source is a git repo, pull latest before starting stream.")
+
+        self.chk_scrcpy_hide = QCheckBox("Show scrcpy window")
+        self.chk_scrcpy_hide.setChecked(False)
+        self.chk_scrcpy_hide.setToolTip("Uncheck to keep scrcpy hidden. Check to show the scrcpy window.")
+        self.chk_scrcpy_hide.stateChanged.connect(self.on_scrcpy_window_toggle)
+
         res_row = QHBoxLayout()
         self.combo_res = QComboBox()
         self.combo_res.addItems(["Native", "4K", "2K", "1080p", "720p", "1024"])
@@ -307,7 +342,8 @@ class MainWindow(QMainWindow):
         lbl_res = QLabel("Max Size"); lbl_res.setToolTip("Maximum stream width/height (preserves aspect ratio).")
         res_row.addWidget(lbl_res); res_row.addWidget(self.combo_res)
 
-        ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo); ll.addLayout(res_row)
+        ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo); ll.addLayout(src_row); ll.addLayout(scrcpy_row)
+        ll.addWidget(self.chk_scrcpy_auto); ll.addWidget(self.chk_scrcpy_hide); ll.addLayout(res_row)
         gb_live.setLayout(ll); l.addWidget(gb_live)
         
         # Snapshots
@@ -401,6 +437,67 @@ class MainWindow(QMainWindow):
         ts = time.strftime("%H:%M:%S")
         self.txt_sys.append(f"[{ts}] {message}")
 
+    def browse_scrcpy(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select scrcpy executable",
+            "",
+            "scrcpy executable (scrcpy.exe);;All Files (*)",
+        )
+        if path:
+            self.input_scrcpy.setText(path)
+            self.log_sys(f"Scrcpy path set: {path}")
+
+    def find_scrcpy_binary(self) -> str:
+        repo_path = Path(self.scrcpy_repo_path)
+        candidates = [
+            repo_path / "scrcpy.exe",
+            repo_path / "app" / "scrcpy.exe",
+            repo_path / "app" / "build" / "scrcpy.exe",
+            repo_path / "app" / "dist" / "scrcpy.exe",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                return str(cand)
+        return ""
+
+    def resolve_scrcpy_path(self) -> str:
+        manual = self.input_scrcpy.text().strip() if hasattr(self, "input_scrcpy") else ""
+        if manual and Path(manual).exists():
+            return manual
+        auto = self.find_scrcpy_binary()
+        if auto:
+            return auto
+        from shutil import which
+        return which("scrcpy") or ""
+
+    def update_scrcpy_repo(self) -> None:
+        repo_path = Path(self.scrcpy_repo_path)
+        git_dir = repo_path / ".git"
+        if not repo_path.exists() or not git_dir.exists():
+            self.log_sys("Scrcpy auto-update skipped (no git repo found)")
+            return
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(repo_path), "pull", "--ff-only"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res.returncode == 0:
+                self.log_sys("Scrcpy auto-update: up to date")
+            else:
+                msg = res.stderr.strip() or res.stdout.strip() or "unknown error"
+                self.log_sys(f"Scrcpy auto-update failed: {msg}")
+        except Exception as ex:
+            self.log_sys(f"Scrcpy auto-update error: {ex}")
+
+    def on_scrcpy_window_toggle(self) -> None:
+        if self.video_thread and isinstance(self.video_thread, ScrcpyVideoSource):
+            self.log_sys("Scrcpy window toggle changed; restarting stream")
+            self.toggle_live()
+            self.toggle_live()
+
     def register_ambient_widget(self, widget) -> None:
         if widget not in self.ambient_widgets:
             self.ambient_widgets.append(widget)
@@ -459,7 +556,7 @@ class MainWindow(QMainWindow):
     def toggle_live(self):
         if self.video_thread:
             # Stop
-            self.video_thread.stop(); self.video_thread = None
+            self.video_thread.stop_stream(); self.video_thread = None
             self.xml_thread.stop(); self.xml_thread = None
             self.log_thread.stop(); self.log_thread = None
             self.focus_thread.stop(); self.focus_thread = None
@@ -472,9 +569,35 @@ class MainWindow(QMainWindow):
                 return
             # Start
             self.txt_log.setText("Starting logcat...")
-            self.video_thread = VideoThread(self.active_device)
+            target_fps = 4 if self.perf_mode else 8
+            source_text = self.combo_live_source.currentText() if hasattr(self, "combo_live_source") else "Scrcpy (fast)"
+            if "Scrcpy" in source_text:
+                self.scrcpy_path = self.resolve_scrcpy_path()
+                if not self.scrcpy_path:
+                    QMessageBox.warning(
+                        self,
+                        "Scrcpy not found",
+                        "scrcpy.exe was not found. Build scrcpy in the local scrcpy-3.3.4 repo or set the path to your scrcpy 3.3.4 binary.",
+                    )
+                    return
+                if self.chk_scrcpy_auto.isChecked():
+                    self.update_scrcpy_repo()
+                scrcpy_fps = 20 if self.perf_mode else 30
+                self.video_thread = ScrcpyVideoSource(
+                    self.active_device,
+                    max_size=self.stream_max_size,
+                    max_fps=scrcpy_fps,
+                    bitrate=2_000_000,
+                    scrcpy_path=self.scrcpy_path or None,
+                    hide_window=(not self.chk_scrcpy_hide.isChecked()) if hasattr(self, "chk_scrcpy_hide") else True,
+                )
+                self.video_thread.log_line.connect(self.log_sys)
+                self.log_sys(f"Live source: Scrcpy (fast) | bin: {self.scrcpy_path}")
+            else:
+                self.video_thread = VideoThread(self.active_device, target_fps=target_fps)
+                self.log_sys("Live source: ADB (compat)")
             self.video_thread.frame_ready.connect(self.on_frame)
-            self.video_thread.start()
+            self.video_thread.start_stream()
             
             self.xml_thread = HierarchyThread(self.active_device)
             self.xml_thread.tree_ready.connect(self.on_tree_data)
@@ -491,6 +614,8 @@ class MainWindow(QMainWindow):
             self.view.control_enabled = True
             self.btn_live.setText("STOP LIVE"); self.btn_live.setProperty("class", "danger")
             self.log_sys(f"Live mirror started on {self.active_device}")
+            if hasattr(self.video_thread, "target_fps"):
+                self.log_sys(f"Live capture target FPS: {self.video_thread.target_fps}")
             self.log_device_info()
         
         self.polish_btn(self.btn_live)
@@ -498,9 +623,13 @@ class MainWindow(QMainWindow):
     def polish_btn(self, btn): btn.style().unpolish(btn); btn.style().polish(btn)
 
     def on_frame(self, data):
-        img = QImage.fromData(data)
+        if isinstance(data, QImage):
+            img = data
+        else:
+            img = QImage.fromData(data)
         if img.isNull():
             return
+        self.last_frame_image = img.copy()
         orig_w = img.width()
         orig_h = img.height()
         if self.stream_max_size:
@@ -543,6 +672,9 @@ class MainWindow(QMainWindow):
         display_ids = meta.get("display_ids", [])
         if display_ids:
             self.log_sys(f"SurfaceFlinger displays: {', '.join(display_ids)}")
+        display_info = meta.get("display_info", [])
+        if display_info:
+            self.log_sys(f"Display info count: {len(display_info)}")
 
     def on_tree_data(self, xml_str, changed):
         if not changed and self.root_node: return
@@ -685,6 +817,8 @@ class MainWindow(QMainWindow):
         if d:
             path = os.path.join(d, f"snap_{int(time.time())}")
             AdbManager.capture_snapshot(self.active_device, path)
+            if self.last_frame_image and not self.last_frame_image.isNull():
+                self.last_frame_image.save(os.path.join(path, "screenshot.png"), "PNG")
             self.load_snapshot(path)
             self.last_snapshot_path = path
             self.btn_recapture.setEnabled(True)
@@ -726,7 +860,11 @@ class MainWindow(QMainWindow):
             self.pixmap_item = self.scene.addPixmap(QPixmap(png))
             self.handle_resize()
             self.stream_scale = 1.0
-            self.last_frame_size = None
+            px = self.pixmap_item.pixmap()
+            if not px.isNull():
+                self.last_frame_size = (px.width(), px.height())
+            else:
+                self.last_frame_size = None
             
         # Load XML
         xml = os.path.join(path, "dump.uix")
@@ -820,6 +958,10 @@ class MainWindow(QMainWindow):
         if text == "Native":
             self.stream_max_size = None
             self.log_sys("Stream size set to native resolution")
+            if self.video_thread and isinstance(self.video_thread, ScrcpyVideoSource):
+                self.log_sys("Scrcpy size changed; restarting stream")
+                self.toggle_live()
+                self.toggle_live()
             return
 
         mapping = {
@@ -831,6 +973,10 @@ class MainWindow(QMainWindow):
         }
         self.stream_max_size = mapping.get(text, 1024)
         self.log_sys(f"Stream max size set to {text} ({self.stream_max_size})")
+        if self.video_thread and isinstance(self.video_thread, ScrcpyVideoSource):
+            self.log_sys("Scrcpy size changed; restarting stream")
+            self.toggle_live()
+            self.toggle_live()
 
     def toggle_auto_follow(self) -> None:
         self.auto_follow_hover = self.chk_auto_follow.isChecked()
@@ -855,6 +1001,11 @@ class MainWindow(QMainWindow):
         self.ambient_phase += 0.08
         self.ambient_offset = (self.ambient_offset + 0.35) % 24
         self.apply_chrome_overlay(translucent=False)
+
+    def closeEvent(self, event):
+        if self.video_thread:
+            self.toggle_live()
+        super().closeEvent(event)
 
     def on_ambient_status(self, status) -> None:
         if not self.ambient_player:
@@ -926,7 +1077,7 @@ class MainWindow(QMainWindow):
         return best_node
 
     def get_bounds_transform(self):
-        if self.video_thread and self.dump_bounds and self.last_frame_size:
+        if self.dump_bounds and self.last_frame_size:
             ox, oy, ow, oh = self.dump_bounds
             fw, fh = self.last_frame_size
             if ow > 0 and oh > 0 and fw > 0 and fh > 0:
@@ -998,6 +1149,12 @@ class MainWindow(QMainWindow):
             self.ambient_frame_interval_ms = 140
         else:
             self.ambient_frame_interval_ms = 90
+        if self.video_thread:
+            if isinstance(self.video_thread, ScrcpyVideoSource):
+                self.video_thread.set_target_fps(20 if self.perf_mode else 30)
+            else:
+                self.video_thread.set_target_fps(4 if self.perf_mode else 8)
+            self.log_sys(f"Live capture target FPS: {self.video_thread.target_fps}")
         self.log_sys(f"Performance mode: {'on' if self.perf_mode else 'off'}")
 
     def enable_fit(self): self.auto_fit = True; self.handle_resize()

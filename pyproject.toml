@@ -22,6 +22,7 @@ keywords = ["android", "adb", "qa", "automation", "testing", "gui", "snapshot"]
 requires-python = ">=3.9"
 dependencies = [
     "PySide6>=6.6.0",
+    "av>=10.0.0",
 ]
 
 [project.scripts]
