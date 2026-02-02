@@ -16,6 +16,9 @@ python src/qa_snapshot_tool/main.py
 ```
 You will see the dark-themed interface appear.
 
+> [!TIP]
+> You can run the app without a device and inspect offline snapshots immediately.
+
 ## Step 2: Selecting your device
 
 In the top left corner of the app:
@@ -23,12 +26,18 @@ In the top left corner of the app:
 *   **If it works**: Great!
 *   **If it is empty**: Click the **Refresh** button. If it is still empty, check your USB cable.
 
+> [!NOTE]
+> For Wi‑Fi devices, use the IP:port field and Connect IP.
+
 ## Step 3: Taking a snapshot (the magic moment)
 
 1.  Pick up your phone and navigate to the screen you want to capture (e.g., a bug where the login button is broken).
 2.  In the app, click the big **"Capture snapshot"** button.
 3.  Wait a few seconds... (The tool is downloading the image and data).
 4.  **Done!** Your phone screen will appear in the main window.
+
+> [!WARNING]
+> Some apps use Android secure flags and may produce black screenshots.
 
 ## Step 4: Investigating elements
 

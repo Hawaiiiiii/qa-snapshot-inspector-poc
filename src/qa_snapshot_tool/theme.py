@@ -43,10 +43,14 @@ class Theme:
     HOVER_OVERLAY: str = "rgba(255, 255, 255, 30)"
 
     @staticmethod
-    def get_stylesheet(ambient_overlay: str = "") -> str:
+    def get_stylesheet(ambient_overlay: str = "", use_translucent: bool = False) -> str:
         """
         Returns the global QSS stylesheet for the application.
         """
+        panel_bg = "rgba(22, 26, 32, 200)" if use_translucent else Theme.BG_PANEL
+        header_bg = "rgba(26, 31, 39, 200)" if use_translucent else Theme.BG_HEADER
+        dark_bg = "rgba(16, 19, 23, 220)" if use_translucent else Theme.BG_DARK
+        elevated_bg = "rgba(31, 37, 48, 210)" if use_translucent else Theme.BG_ELEVATED
         return f"""
         QMainWindow {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b0f14, stop:0.6 #121722, stop:1 #10131a);
@@ -72,7 +76,7 @@ class Theme:
         }}
         
         QDockWidget::title {{
-            background: {Theme.BG_HEADER};
+            background: {header_bg};
             padding-left: 5px;
             padding-top: 4px;
             padding-bottom: 4px; 
@@ -103,7 +107,7 @@ class Theme:
         
         /* Lists & Trees */
         QTreeWidget, QListWidget {{
-            background-color: {Theme.BG_PANEL};
+            background-color: {panel_bg};
             border: 1px solid {Theme.BORDER};
             outline: none;
         }}
@@ -120,7 +124,7 @@ class Theme:
 
         /* Buttons */
         QPushButton {{
-            background-color: {Theme.BG_ELEVATED};
+            background-color: {elevated_bg};
             border: 1px solid {Theme.BORDER};
             padding: 7px 12px;
             border-radius: 6px;
@@ -157,7 +161,7 @@ class Theme:
 
         /* Inputs */
         QLineEdit, QTextEdit {{
-            background-color: #1b2028;
+            background-color: {dark_bg};
             border: 1px solid {Theme.BORDER};
             padding: 4px;
             color: {Theme.TEXT_WHITE};
@@ -188,7 +192,7 @@ class Theme:
             border: 1px solid {Theme.BORDER};
             margin-top: 10px;
             border-radius: 6px;
-            background: {Theme.BG_PANEL};
+            background: {panel_bg};
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
@@ -199,10 +203,10 @@ class Theme:
 
         QTabWidget::pane {{
             border: 1px solid {Theme.BORDER};
-            background: {Theme.BG_PANEL};
+            background: {panel_bg};
         }}
         QTabBar::tab {{
-            background: {Theme.BG_HEADER};
+            background: {header_bg};
             padding: 6px 12px;
             margin-right: 2px;
             border: 1px solid {Theme.BORDER};
@@ -210,12 +214,12 @@ class Theme:
             border-top-right-radius: 6px;
         }}
         QTabBar::tab:selected {{
-            background: {Theme.BG_ELEVATED};
-            border-bottom-color: {Theme.BG_ELEVATED};
+            background: {elevated_bg};
+            border-bottom-color: {elevated_bg};
         }}
 
         QHeaderView::section {{
-            background: {Theme.BG_HEADER};
+            background: {header_bg};
             border: 1px solid {Theme.BORDER};
             padding: 4px;
         }}

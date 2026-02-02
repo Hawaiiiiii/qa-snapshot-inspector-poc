@@ -1,6 +1,27 @@
 # QUANTUM Inspector (QA Snapshot Inspector)
 
-A professional-grade Python desktop GUI to inspect Android UI snapshots (UIAutomator dumps + screenshots), review live device state, and generate robust locators for QA automation.
+<p align="center">
+	<img src="assets/icons/quantum.svg" width="140" alt="QUANTUM Icon" />
+</p>
+
+<p align="center">
+	<b>Professional-grade Android UI snapshot inspector</b><br/>
+	Live mirror + offline analysis + robust locator generation
+</p>
+
+<p align="center">
+	<a href="README.md"><img src="https://img.shields.io/badge/status-active-2ea043.svg" alt="Status" /></a>
+	<a href="README.md"><img src="https://img.shields.io/badge/python-3.11%2B-3776AB.svg" alt="Python" /></a>
+	<a href="README.md"><img src="https://img.shields.io/badge/platform-windows%2011-0078D4.svg" alt="Platform" /></a>
+	<a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-8A2BE2.svg" alt="License" /></a>
+</p>
+
+<p align="center">
+	<a href="docs/ARCHITECTURE.md">Architecture</a> •
+	<a href="docs/USAGE_GUIDE.md">Usage Guide</a> •
+	<a href="docs/TROUBLESHOOTING.md">Troubleshooting</a> •
+	<a href="docs/QUANTUM%20INSPECTOR%20-%20EN.pdf">Internal Paper</a>
+</p>
 
 Project owner and technical authority: David Erik García Arenas (QA, Paradox Cat).
 
@@ -8,29 +29,69 @@ Project owner and technical authority: David Erik García Arenas (QA, Paradox Ca
 
 V1 PoC (current build).
 
+> [!NOTE]
+> BMW Type Next is a licensed font. If it is not available, the UI falls back to Segoe UI.
+
+> [!IMPORTANT]
+> PoC validation plan for AI-generated tests: [docs/POC_VALIDATION.md](docs/POC_VALIDATION.md)
+
 ## What it does
 
-- Live mirror via ADB (optional) to inspect the current UI in real time.
-- Offline snapshot inspection from saved folders.
-- UI tree navigation with hover/selection overlay on the screenshot.
-- Inspector panel with node properties (text, bounds, resource-id, etc.).
-- Locator suggestions (XPath + Appium Java/Python formats).
+| Area | Capability |
+| --- | --- |
+| Live | ADB mirror with optional input control |
+| Performance | Stream resolution presets (Native, 4K, 2K, 1080p, 720p, 1024) |
+| Offline | dump.uix picker + offline logcat view |
+| UI Tree | Auto-follow hover, expand on focus, selection lock (Enter/click) |
+| Inspector | Node properties (text, bounds, resource-id, etc.) |
+| Locators | XPath + Appium Java/Python formats |
+| Logging | Logcat tab + separate System Log dock |
+| Snapshot | Re-capture last snapshot (one-click refresh) |
+| Devices | IP connect + recent device history + devices.json profiles |
+| Diagnostics | Corrupted snapshot detection (zero nodes/invalid bounds) |
+
+> [!TIP]
+> Use Offline mode to inspect snapshots without a connected device.
+
+## Quick start
+
+- [ ] Create venv and install deps
+- [ ] Run the app
+- [ ] Load a dump or start live mirror
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Usage Guide](docs/USAGE_GUIDE.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
+| Resource | Link |
+| --- | --- |
+| Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Usage Guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
+| Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
-## Additional visuals
+## Visuals
+
+<details>
+<summary>UI example (what each section shows)</summary>
 
 ![QUANTUM Inspector UI - Example](docs/ui-example.png)
 
 UI_Example: guidance screenshot to explain what each section shows when you open a screen.
+</details>
 
-## Draft article / documentation
+## Internal papers
 
-- [QUANTUM_Article_Final.pdf](docs/QUANTUM_Article_Final.pdf) — ongoing documentation/article for the PoC. Spanish only for now.
+<details>
+<summary>Confidential PDFs</summary>
+
+| Title | Link |
+| --- | --- |
+| QUANTUM INSPECTOR - EN | [docs/QUANTUM%20INSPECTOR%20-%20EN.pdf](docs/QUANTUM%20INSPECTOR%20-%20EN.pdf) |
+| Especificaciones Técnicas QUANTUM Inspector Android Automotive | [docs/Especificaciones%20T%C3%A9cnicas%20QUANTUM%20Inspector%20Android%20Automotive.pdf](docs/Especificaciones%20T%C3%A9cnicas%20QUANTUM%20Inspector%20Android%20Automotive.pdf) |
+| Whitepaper técnico interno  QUANTUM INSPECTOR 2 | [docs/Whitepaper%20t%C3%A9cnico%20interno%20%20QUANTUM%20INSPECTOR%202.pdf](docs/Whitepaper%20t%C3%A9cnico%20interno%20%20QUANTUM%20INSPECTOR%202.pdf) |
+
+</details>
+
+> [!CAUTION]
+> Internal papers are confidential. Do not distribute outside approved teams.
 
 ## Prerequisites
 
@@ -42,10 +103,13 @@ UI_Example: guidance screenshot to explain what each section shows when you open
 
 Each snapshot folder can include:
 
-- screenshot.png (ADB screencap)
-- dump.uix (UIAutomator XML dump)
-- meta.json (device info, focused activity, timestamps)
-- logcat.txt (optional)
+| File | Purpose |
+| --- | --- |
+| screenshot.png | ADB screencap |
+| dump.uix | UIAutomator XML dump |
+| focus.txt | Focused window summary (optional) |
+| meta.json | Device info, activity, timestamps |
+| logcat.txt | Log output (optional) |
 
 Missing files are handled gracefully with warnings.
 

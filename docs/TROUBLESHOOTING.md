@@ -14,6 +14,9 @@ This is the most common issue.
     adb start-server
     ```
 
+> [!TIP]
+> Try a different USB cable if the device still does not show up.
+
 ## 2. "Parse error" or app crashes
 
 If the app crashes immediately after taking a snapshot:
@@ -21,11 +24,17 @@ If the app crashes immediately after taking a snapshot:
 *   **Solution**: Close the error, navigate to a slightly different screen on the phone, and try again.
 *   **Reporting**: If it happens consistently, share the `dump.uix` file with the dev team (via GitHub Issues).
 
+> [!CAUTION]
+> Corrupted dumps are common on heavy UI screens. Re-capture before reporting.
+
 ## 3. Black screenshots (the "security" problem)
 
 *   **Symptom**: You capture a snapshot, but the image is completely black.
 *   **Cause**: The app you are testing has `FLAG_SECURE` enabled. This is common in banking apps, Netflix, or login screens to prevent spyware.
 *   **Solution**: You must use a **debug/QA build** of your application where this security flag is disabled. We cannot bypass Android's OS-level security.
+
+> [!WARNING]
+> Do not attempt to bypass OS-level security protections.
 
 ## 4. Elements are misaligned
 

@@ -13,13 +13,16 @@ import glob
 import time
 import json
 import math
+from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTreeWidget, QTreeWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QFileDialog, QTextEdit,
     QGroupBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication, QLineEdit, QCheckBox
 )
-from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor
+from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor, QLinearGradient, QPalette
+from PySide6.QtCore import QUrl
+from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink
 from PySide6.QtCore import Qt, QRectF, Signal, QTimer
 
 from qa_snapshot_tool.uix_parser import UixParser
@@ -111,6 +114,31 @@ class SmartGraphicsView(QGraphicsView):
 
     def resizeEvent(self, e): self.view_resized.emit(); super().resizeEvent(e)
 
+class AmbientPanel(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._ambient_pixmap = None
+        self._ambient_opacity = 0.22
+        self._overlay_color = QColor(10, 14, 22, 140)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background: transparent;")
+
+    def set_ambient_pixmap(self, pixmap: QPixmap) -> None:
+        self._ambient_pixmap = pixmap
+        self.update()
+
+    def paintEvent(self, event):
+        if self._ambient_pixmap and not self._ambient_pixmap.isNull():
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.SmoothPixmapTransform)
+            painter.setOpacity(self._ambient_opacity)
+            painter.drawPixmap(self.rect(), self._ambient_pixmap)
+            painter.setOpacity(1.0)
+            painter.fillRect(self.rect(), self._overlay_color)
+            painter.end()
+        super().paintEvent(event)
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -135,6 +163,22 @@ class MainWindow(QMainWindow):
         self.stream_max_size = None
         self.ambient_enabled = True
         self.ambient_phase = 0.0
+        self.ambient_offset = 0.0
+        self.ambient_widgets = []
+        self.ambient_panels = []
+        self.ambient_player = None
+        self.ambient_audio = None
+        self.ambient_sink = None
+        self.ambient_enabled = True
+        self.ambient_last_hash = None
+        self.ambient_prev_image = None
+        self.ambient_last_frame_ts = 0.0
+        self.ambient_frame_interval_ms = 90
+        self.ambient_static_frame = None
+        self.perf_mode = False
+        self.last_tree_update = 0.0
+        self.last_snapshot_path = None
+        self.device_profiles = []
         self.auto_fit = True
         self.fps_counter = 0
         
@@ -147,13 +191,14 @@ class MainWindow(QMainWindow):
 
         self.ambient_timer = QTimer()
         self.ambient_timer.timeout.connect(self.update_ambient)
-        self.ambient_timer.start(250)
 
     def setup_ui(self):
         central = QWidget(); central_lay = QVBoxLayout(central); central_lay.setContentsMargins(0,0,0,0)
         
         # Toolbar
         tb = QToolBar()
+        self.toolbar = tb
+        self.register_ambient_widget(tb)
         self.lbl_fps = QLabel("FPS: 0"); self.lbl_fps.setStyleSheet("color: #7c8aa3; font-weight: 600;")
         self.lbl_coords = QLabel("X: 0, Y: 0"); self.lbl_coords.setStyleSheet("color: #c1c7d2; font-family: monospace;")
         self.lbl_focus = QLabel("Focus: -"); self.lbl_focus.setStyleSheet("color: #7db6ff; font-weight: 600;")
@@ -168,6 +213,12 @@ class MainWindow(QMainWindow):
         # View
         self.scene = QGraphicsScene()
         self.view = SmartGraphicsView(self.scene)
+        self.view.setStyleSheet(f"background-color: {Theme.BG_DARK};")
+        self.view.setBackgroundBrush(QBrush(QColor(Theme.BG_DARK)))
+        self.view.viewport().setAutoFillBackground(True)
+        self.view.viewport().setStyleSheet(f"background-color: {Theme.BG_DARK};")
+        self.view.setAttribute(Qt.WA_OpaquePaintEvent, True)
+        self.view.setBackgroundBrush(QBrush(QColor(Theme.BG_DARK)))
         self.view.mouse_moved.connect(self.on_mouse_hover)
         self.view.input_tap.connect(self.handle_tap)
         self.view.input_swipe.connect(self.handle_swipe)
@@ -175,11 +226,18 @@ class MainWindow(QMainWindow):
         central_lay.addWidget(self.view)
         
         self.setCentralWidget(central)
+        central.setAutoFillBackground(True)
+        pal = central.palette()
+        pal.setColor(QPalette.Window, QColor(Theme.BG_DARK))
+        central.setPalette(pal)
 
         # Docks
         self.setup_control_dock()
         self.setup_tree_dock()
         self.setup_inspector_dock()
+        self.setup_syslog_dock()
+
+        self.init_ambient_video()
 
         # Overlay Items
         self.rect_item = QGraphicsRectItem()
@@ -190,6 +248,8 @@ class MainWindow(QMainWindow):
 
     def setup_control_dock(self):
         d = QDockWidget("Environment", self); w = QWidget(); l = QVBoxLayout(w)
+        self.dock_env = d
+        self.register_ambient_widget(d)
         
         # Device Selection
         gb_dev = QGroupBox("Target Device"); gl = QVBoxLayout()
@@ -214,9 +274,19 @@ class MainWindow(QMainWindow):
         self.btn_reconnect.setToolTip("Reconnect to the selected recent device.")
         hist_row.addWidget(self.combo_history); hist_row.addWidget(self.btn_reconnect)
 
+        prof_row = QHBoxLayout()
+        self.combo_profiles = QComboBox()
+        self.combo_profiles.setToolTip("Device profiles from devices.json (optional).")
+        self.combo_profiles.currentIndexChanged.connect(self.apply_profile)
+        self.btn_reload_profiles = QPushButton("Reload Profiles")
+        self.btn_reload_profiles.clicked.connect(self.load_device_profiles)
+        self.btn_reload_profiles.setToolTip("Reload device profiles from devices.json.")
+        prof_row.addWidget(self.combo_profiles); prof_row.addWidget(self.btn_reload_profiles)
+
         gl.addWidget(self.combo_dev); gl.addWidget(btn_ref)
         gl.addLayout(ip_row)
         gl.addLayout(hist_row)
+        gl.addLayout(prof_row)
         gb_dev.setLayout(gl); l.addWidget(gb_dev)
         
         # Live Modes
@@ -228,7 +298,7 @@ class MainWindow(QMainWindow):
 
         res_row = QHBoxLayout()
         self.combo_res = QComboBox()
-        self.combo_res.addItems(["Native", "1024", "1280", "1600", "1920"])
+        self.combo_res.addItems(["Native", "4K", "2K", "1080p", "720p", "1024"])
         self.combo_res.currentIndexChanged.connect(self.on_stream_size_change)
         self.combo_res.setToolTip("Reduce stream resolution for better performance.")
         lbl_res = QLabel("Max Size"); lbl_res.setToolTip("Maximum stream width/height (preserves aspect ratio).")
@@ -243,7 +313,10 @@ class MainWindow(QMainWindow):
         btn_cap.setToolTip("Capture screenshot, UI dump, and logcat into a snapshot folder.")
         btn_load = QPushButton("Load Offline Dump..."); btn_load.setProperty("class", "accent"); btn_load.clicked.connect(self.load_snapshot_dialog)
         btn_load.setToolTip("Load an offline dump (dump.uix) from a snapshot folder.")
-        sl.addWidget(btn_cap); sl.addWidget(btn_load)
+        self.btn_recapture = QPushButton("Re-Capture Last"); self.btn_recapture.clicked.connect(self.recapture_last_snapshot)
+        self.btn_recapture.setToolTip("Re-capture the last loaded snapshot using the active device.")
+        self.btn_recapture.setEnabled(False)
+        sl.addWidget(btn_cap); sl.addWidget(btn_load); sl.addWidget(self.btn_recapture)
         gb_snap.setLayout(sl); l.addWidget(gb_snap)
 
         gb_opts = QGroupBox("UX Options"); ol = QVBoxLayout()
@@ -252,27 +325,37 @@ class MainWindow(QMainWindow):
         self.chk_auto_follow.stateChanged.connect(self.toggle_auto_follow)
         self.chk_auto_follow.setToolTip("Auto-scroll the UI Tree to the element under the cursor.")
 
-        self.chk_ambient = QCheckBox("Ambient Glow")
+        self.chk_ambient = QCheckBox("Ambient Video")
         self.chk_ambient.setChecked(True)
-        self.chk_ambient.stateChanged.connect(self.toggle_ambient)
-        self.chk_ambient.setToolTip("Animated gradient for BMW-style ambient feel. Disable for performance.")
+        self.chk_ambient.stateChanged.connect(self.toggle_ambient_video)
+        self.chk_ambient.setToolTip("Animate the dock panels only. Live view stays clean.")
 
-        ol.addWidget(self.chk_auto_follow); ol.addWidget(self.chk_ambient)
+        self.chk_perf = QCheckBox("Performance Mode")
+        self.chk_perf.setChecked(False)
+        self.chk_perf.stateChanged.connect(self.toggle_perf_mode)
+        self.chk_perf.setToolTip("Reduce UI tree refresh rate while live streaming.")
+
+        ol.addWidget(self.chk_auto_follow); ol.addWidget(self.chk_ambient); ol.addWidget(self.chk_perf)
         gb_opts.setLayout(ol); l.addWidget(gb_opts)
         
         l.addStretch()
-        d.setWidget(w); self.addDockWidget(Qt.LeftDockWidgetArea, d)
+        d.setWidget(self.wrap_ambient_panel(w)); self.addDockWidget(Qt.LeftDockWidgetArea, d)
+        self.load_device_profiles()
 
     def setup_tree_dock(self):
         d = QDockWidget("Hierarchy", self)
+        self.dock_tree = d
+        self.register_ambient_widget(d)
         self.tree = QTreeWidget(); self.tree.setHeaderLabel("UI Tree")
         self.tree.itemClicked.connect(self.on_tree_click)
         self.tree.currentItemChanged.connect(self.on_tree_current_changed)
         self.tree.setToolTip("UI hierarchy. Use arrow keys to navigate; Enter to lock/unlock selection.")
-        d.setWidget(self.tree); self.addDockWidget(Qt.RightDockWidgetArea, d)
+        d.setWidget(self.wrap_ambient_panel(self.tree)); self.addDockWidget(Qt.RightDockWidgetArea, d)
 
     def setup_inspector_dock(self):
         d = QDockWidget("Inspector", self); tabs = QTabWidget()
+        self.dock_inspector = d
+        self.register_ambient_widget(d)
         
         # Properties Tab (The one missing data in your screenshot)
         self.tbl_props = QTableWidget(); self.tbl_props.setColumnCount(2)
@@ -295,18 +378,63 @@ class MainWindow(QMainWindow):
         self.txt_log.setToolTip("Live device log output. Offline snapshots load logcat.txt here.")
         tabs.addTab(self.txt_log, "Logcat")
 
-        # System Log Tab
+        
+        
+        d.setWidget(self.wrap_ambient_panel(tabs)); self.addDockWidget(Qt.BottomDockWidgetArea, d)
+
+    def setup_syslog_dock(self):
+        d = QDockWidget("System Log", self)
+        self.dock_syslog = d
+        self.register_ambient_widget(d)
         self.txt_sys = QTextEdit(); self.txt_sys.setReadOnly(True)
         self.txt_sys.setToolTip("Internal app events, status updates, and diagnostics.")
-        tabs.addTab(self.txt_sys, "System Log")
-        
-        d.setWidget(tabs); self.addDockWidget(Qt.BottomDockWidgetArea, d)
+        d.setWidget(self.wrap_ambient_panel(self.txt_sys)); self.addDockWidget(Qt.BottomDockWidgetArea, d)
 
     # --- Core Logic ---
 
     def log_sys(self, message: str) -> None:
+        if not hasattr(self, "txt_sys"):
+            return
         ts = time.strftime("%H:%M:%S")
         self.txt_sys.append(f"[{ts}] {message}")
+
+    def register_ambient_widget(self, widget) -> None:
+        if widget not in self.ambient_widgets:
+            self.ambient_widgets.append(widget)
+        if hasattr(widget, "setAttribute"):
+            widget.setAttribute(Qt.WA_StyledBackground, True)
+
+    def wrap_ambient_panel(self, widget: QWidget) -> QWidget:
+        panel = AmbientPanel()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(widget)
+        self.ambient_panels.append(panel)
+        return panel
+
+    def init_ambient_video(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        video_path = root / "assets" / "fui_hmi_ux" / "UX.webm"
+        if not video_path.exists():
+            self.log_sys("Ambient video not found. Background disabled.")
+            self.ambient_enabled = False
+            return
+
+        self.ambient_sink = QVideoSink()
+        self.ambient_sink.videoFrameChanged.connect(self.on_ambient_frame)
+
+        self.ambient_player = QMediaPlayer(self)
+        self.ambient_audio = QAudioOutput(self)
+        self.ambient_audio.setVolume(0.0)
+        self.ambient_player.setAudioOutput(self.ambient_audio)
+        self.ambient_player.setVideoOutput(self.ambient_sink)
+        self.ambient_player.setSource(QUrl.fromLocalFile(str(video_path)))
+        self.ambient_player.mediaStatusChanged.connect(self.on_ambient_status)
+
+        if self.ambient_enabled:
+            self.ambient_player.play()
+            self.apply_chrome_overlay(translucent=True)
+            self.log_sys("Ambient video loaded")
 
     def refresh_devices(self):
         self.combo_dev.blockSignals(True); self.combo_dev.clear()
@@ -388,6 +516,12 @@ class MainWindow(QMainWindow):
 
     def on_tree_data(self, xml_str, changed):
         if not changed and self.root_node: return
+
+        if self.perf_mode and self.video_thread:
+            now = time.time()
+            if now - self.last_tree_update < 1.5:
+                return
+            self.last_tree_update = now
         
         root, parse_err = UixParser.parse(xml_str)
         self.root_node = root
@@ -399,6 +533,9 @@ class MainWindow(QMainWindow):
                 self.log_sys("UI dump loaded but has zero valid bounds. The dump may be incomplete.")
         else:
             self.log_sys("UI dump parsed with no nodes. The dump may be invalid.")
+
+        if root and not self.rect_map:
+            self.log_sys("Snapshot flagged: zero valid element bounds detected.")
         
         # Restore selection logic would go here
         
@@ -508,6 +645,9 @@ class MainWindow(QMainWindow):
             path = os.path.join(d, f"snap_{int(time.time())}")
             AdbManager.capture_snapshot(self.active_device, path)
             self.load_snapshot(path)
+            self.last_snapshot_path = path
+            self.btn_recapture.setEnabled(True)
+            self.log_sys(f"Snapshot captured: {path}")
 
     def load_snapshot_dialog(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -562,6 +702,8 @@ class MainWindow(QMainWindow):
             self.txt_log.setText("No logcat file found in this snapshot.")
 
         self.log_sys(f"Loaded snapshot: {path}")
+        self.last_snapshot_path = path
+        self.btn_recapture.setEnabled(True)
         
         self.setWindowTitle(f"QUANTUM Inspector - {os.path.basename(path)}")
 
@@ -574,6 +716,44 @@ class MainWindow(QMainWindow):
             model = e.get("model", "Unknown")
             self.combo_history.addItem(f"{model} ({serial})", serial)
         self.combo_history.blockSignals(False)
+
+    def load_device_profiles(self) -> None:
+        self.combo_profiles.blockSignals(True)
+        self.combo_profiles.clear()
+
+        root = Path(__file__).resolve().parents[3]
+        config_path = root / "devices.json"
+        profiles = []
+        if config_path.exists():
+            try:
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+                profiles = data.get("profiles") or data.get("known_devices") or []
+            except Exception:
+                profiles = []
+
+        for p in profiles:
+            serial = p.get("serial", "")
+            model = p.get("model", "Unknown")
+            self.combo_profiles.addItem(f"{model} ({serial})", p)
+
+        self.combo_profiles.blockSignals(False)
+        self.log_sys(f"Device profiles loaded: {len(profiles)}")
+
+    def apply_profile(self) -> None:
+        profile = self.combo_profiles.currentData()
+        if not isinstance(profile, dict):
+            return
+        serial = profile.get("serial", "")
+        if serial:
+            self.input_ip.setText(serial)
+            self.log_sys(f"Profile selected: {serial}")
+
+        max_size = profile.get("max_size")
+        if max_size:
+            max_size_str = str(max_size)
+            idx = self.combo_res.findText(max_size_str)
+            if idx != -1:
+                self.combo_res.setCurrentIndex(idx)
 
     def connect_ip_device(self) -> None:
         addr = self.input_ip.text().strip()
@@ -597,31 +777,91 @@ class MainWindow(QMainWindow):
         if text == "Native":
             self.stream_max_size = None
             self.log_sys("Stream size set to native resolution")
-        else:
-            self.stream_max_size = int(text)
-            self.log_sys(f"Stream max size set to {self.stream_max_size}")
+            return
+
+        mapping = {
+            "4K": 2160,
+            "2K": 1440,
+            "1080p": 1080,
+            "720p": 720,
+            "1024": 1024,
+        }
+        self.stream_max_size = mapping.get(text, 1024)
+        self.log_sys(f"Stream max size set to {text} ({self.stream_max_size})")
 
     def toggle_auto_follow(self) -> None:
         self.auto_follow_hover = self.chk_auto_follow.isChecked()
         self.log_sys(f"Auto locate hover: {'on' if self.auto_follow_hover else 'off'}")
 
-    def toggle_ambient(self) -> None:
+    def toggle_ambient_video(self) -> None:
         self.ambient_enabled = self.chk_ambient.isChecked()
         if not self.ambient_enabled:
-            self.ambient_timer.stop()
-            QApplication.instance().setStyleSheet(Theme.get_stylesheet())
+            if self.ambient_player:
+                self.ambient_player.pause()
+            self.apply_chrome_overlay(translucent=False)
+            self.ambient_static_frame = None
         else:
-            self.ambient_timer.start(250)
-        self.log_sys(f"Ambient glow: {'on' if self.ambient_enabled else 'off'}")
+            if self.ambient_player:
+                self.ambient_player.play()
+            self.apply_chrome_overlay(translucent=True)
+        self.log_sys(f"Ambient video: {'on' if self.ambient_enabled else 'off'}")
 
     def update_ambient(self) -> None:
         if not self.ambient_enabled:
             return
         self.ambient_phase += 0.08
-        r = int(20 + 15 * (1 + math.sin(self.ambient_phase)))
-        b = int(40 + 30 * (1 + math.cos(self.ambient_phase * 0.7)))
-        overlay = f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(15, 20, {b}, 255), stop:1 rgba({r}, 30, 60, 255));"
-        QApplication.instance().setStyleSheet(Theme.get_stylesheet(ambient_overlay=overlay))
+        self.ambient_offset = (self.ambient_offset + 0.35) % 24
+        self.apply_chrome_overlay(translucent=False)
+
+    def on_ambient_status(self, status) -> None:
+        if not self.ambient_player:
+            return
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self.ambient_player.setPosition(0)
+            self.ambient_player.play()
+
+    def apply_chrome_overlay(self, translucent: bool) -> None:
+        overlay = "background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(12, 18, 34, 255), stop:1 rgba(18, 28, 60, 255));"
+        QApplication.instance().setStyleSheet(Theme.get_stylesheet(ambient_overlay=overlay, use_translucent=translucent))
+
+    def apply_led_fallback(self) -> None:
+        return
+
+    def apply_ambient_brush(self, widget, brush: QBrush) -> None:
+        pal = widget.palette()
+        pal.setBrush(QPalette.Window, brush)
+        widget.setAutoFillBackground(True)
+        widget.setPalette(pal)
+        widget.update()
+
+    def soft_blur(self, img: QImage) -> QImage:
+        # Mild blur by downscale/upscale + gentle dark overlay
+        w = max(96, img.width() // 4)
+        h = max(96, img.height() // 4)
+        small = img.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        blurred = small.scaled(img.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+
+        painter = QPainter(blurred)
+        painter.fillRect(blurred.rect(), QColor(8, 12, 20, 90))
+        painter.end()
+        return blurred
+
+    def blend_ambient(self, img: QImage) -> QImage:
+        # Temporal smoothing to reduce flicker
+        if self.ambient_prev_image is None:
+            self.ambient_prev_image = img
+            return img
+
+        blended = QImage(img.size(), QImage.Format_ARGB32)
+        blended.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(blended)
+        painter.setOpacity(0.7)
+        painter.drawImage(0, 0, self.ambient_prev_image)
+        painter.setOpacity(0.3)
+        painter.drawImage(0, 0, img)
+        painter.end()
+        self.ambient_prev_image = blended
+        return blended
 
     def expand_to_item(self, item: QTreeWidgetItem) -> None:
         cur = item
@@ -679,7 +919,52 @@ class MainWindow(QMainWindow):
                     return
         super().keyPressEvent(event)
 
+    def recapture_last_snapshot(self) -> None:
+        if not self.last_snapshot_path:
+            self.log_sys("No snapshot available to re-capture")
+            return
+        if not self.active_device:
+            self.log_sys("Re-capture requested but no device is selected")
+            return
+        AdbManager.capture_snapshot(self.active_device, self.last_snapshot_path)
+        self.load_snapshot(self.last_snapshot_path)
+        self.log_sys(f"Snapshot re-captured: {self.last_snapshot_path}")
+
+    def toggle_perf_mode(self) -> None:
+        self.perf_mode = self.chk_perf.isChecked()
+        if self.perf_mode:
+            self.ambient_frame_interval_ms = 140
+        else:
+            self.ambient_frame_interval_ms = 90
+        self.log_sys(f"Performance mode: {'on' if self.perf_mode else 'off'}")
+
     def enable_fit(self): self.auto_fit = True; self.handle_resize()
     def disable_fit(self): self.auto_fit = False; self.view.resetTransform()
     def handle_resize(self):
         if self.auto_fit and self.pixmap_item: self.view.fitInView(self.pixmap_item, Qt.KeepAspectRatio)
+
+    def on_ambient_frame(self, frame) -> None:
+        if not self.ambient_enabled:
+            return
+        if not frame or not frame.isValid():
+            return
+        now = time.monotonic()
+        if (now - self.ambient_last_frame_ts) * 1000.0 < self.ambient_frame_interval_ms:
+            return
+        self.ambient_last_frame_ts = now
+        img = frame.toImage()
+        if img.isNull():
+            return
+        if self.perf_mode:
+            if self.ambient_static_frame is None:
+                if img.width() > 640:
+                    img = img.scaledToWidth(640, Qt.SmoothTransformation)
+                self.ambient_static_frame = QPixmap.fromImage(img)
+            pixmap = self.ambient_static_frame
+        else:
+            if img.width() > 720:
+                img = img.scaledToWidth(720, Qt.SmoothTransformation)
+            img = self.soft_blur(self.blend_ambient(img))
+            pixmap = QPixmap.fromImage(img)
+        for panel in self.ambient_panels:
+            panel.set_ambient_pixmap(pixmap)

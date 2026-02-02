@@ -4,6 +4,9 @@
 
 This document explains the inner workings of the **QUANTUM Inspector** in plain English. You don't need a PhD in Computer Science to understand how we turn your phone screen into a debuggable playground.
 
+> [!NOTE]
+> This architecture focuses on clarity over implementation details. See the code for exact APIs.
+
 ## The big picture
 
 The application acts as a bridge between your **Android Device** and your **Desktop**.
