@@ -222,6 +222,8 @@ class AdbManager:
                 wakefulness = line.split("=", 1)[1]
             if line.startswith("mInteractive="):
                 interactive = line.split("=", 1)[1]
+            if line.startswith("interactive="):
+                interactive = line.split("=", 1)[1]
         return {"wakefulness": wakefulness, "interactive": interactive}
 
     @staticmethod
@@ -240,6 +242,7 @@ class AdbManager:
         model = AdbManager.getprop(serial, "ro.product.model")
         serialno = AdbManager.getprop(serial, "ro.serialno")
         display_ids = AdbManager.get_display_ids(serial)
+        display_info = AdbManager.get_display_summary(serial)
         power = AdbManager.get_power_summary(serial)
         return {
             "timestamp": now,
@@ -247,6 +250,7 @@ class AdbManager:
             "serialno": serialno,
             "model": model,
             "display_ids": display_ids,
+            "display_info": display_info,
             "power": power,
         }
 
