@@ -16,6 +16,13 @@ class AdbManager:
     """
     Static utility class for ADB operations.
     """
+    _display_ids_cache: Dict[str, List[str]] = {}
+    _best_display_id: Dict[str, str] = {}
+
+    @staticmethod
+    def getprop(serial: str, prop: str) -> str:
+        res = AdbManager._run_cmd(['adb', '-s', serial, 'shell', 'getprop', prop], timeout=5)
+        return (res.stdout or "").strip()
 
     @staticmethod
     def _run_cmd(cmd: List[str], timeout: int = 10) -> subprocess.CompletedProcess:
@@ -157,11 +164,91 @@ class AdbManager:
             Optional[bytes]: The PNG image data, or None if capture failed.
         """
         # -p is essential for PNG format
-        cmd = ['adb', '-s', serial, 'exec-out', 'screencap', '-p']
-        res = AdbManager._run_bytes_cmd(cmd)
-        if res and res.returncode == 0:
-            return res.stdout
-        return None
+        best_bytes: Optional[bytes] = None
+        best_len = 0
+        best_id = None
+
+        # If we already know the best display id, try it first
+        preferred_id = AdbManager._best_display_id.get(serial)
+        if preferred_id:
+            res = AdbManager._run_bytes_cmd(['adb', '-s', serial, 'exec-out', 'screencap', '-p', '-d', preferred_id])
+            if res and res.returncode == 0 and res.stdout:
+                return res.stdout
+
+        display_ids = AdbManager.get_display_ids(serial)
+        fallback_ids = ["0", "1", "2", "3", "4", "5"]
+        candidates = list(dict.fromkeys(display_ids + fallback_ids))
+
+        for disp_id in candidates:
+            res = AdbManager._run_bytes_cmd(['adb', '-s', serial, 'exec-out', 'screencap', '-p', '-d', disp_id])
+            if res and res.returncode == 0 and res.stdout:
+                size = len(res.stdout)
+                if size > best_len:
+                    best_len = size
+                    best_bytes = res.stdout
+                    best_id = disp_id
+
+        if best_id:
+            AdbManager._best_display_id[serial] = best_id
+        return best_bytes
+
+    @staticmethod
+    def get_display_ids(serial: str) -> List[str]:
+        """
+        Retrieves SurfaceFlinger display IDs for multi-display devices.
+        """
+        if serial in AdbManager._display_ids_cache:
+            return AdbManager._display_ids_cache[serial]
+        res = AdbManager._run_cmd(['adb', '-s', serial, 'shell', 'dumpsys', 'SurfaceFlinger', '--display-id'], timeout=10)
+        ids: List[str] = []
+        if res and res.stdout:
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("Display ") or line.startswith("Virtual Display "):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1].isdigit():
+                        ids.append(parts[1])
+        AdbManager._display_ids_cache[serial] = ids
+        return ids
+
+    @staticmethod
+    def get_power_summary(serial: str) -> Dict[str, str]:
+        res = AdbManager._run_cmd(['adb', '-s', serial, 'shell', 'dumpsys', 'power'], timeout=8)
+        wakefulness = "Unknown"
+        interactive = "Unknown"
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("mWakefulness="):
+                wakefulness = line.split("=", 1)[1]
+            if line.startswith("mInteractive="):
+                interactive = line.split("=", 1)[1]
+        return {"wakefulness": wakefulness, "interactive": interactive}
+
+    @staticmethod
+    def get_display_summary(serial: str) -> List[str]:
+        res = AdbManager._run_cmd(['adb', '-s', serial, 'shell', 'dumpsys', 'display'], timeout=10)
+        summaries: List[str] = []
+        for line in res.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("DisplayDeviceInfo{"):
+                summaries.append(line)
+        return summaries
+
+    @staticmethod
+    def get_device_meta(serial: str) -> Dict[str, Any]:
+        now = int(time.time())
+        model = AdbManager.getprop(serial, "ro.product.model")
+        serialno = AdbManager.getprop(serial, "ro.serialno")
+        display_ids = AdbManager.get_display_ids(serial)
+        power = AdbManager.get_power_summary(serial)
+        return {
+            "timestamp": now,
+            "serial": serial,
+            "serialno": serialno,
+            "model": model,
+            "display_ids": display_ids,
+            "power": power,
+        }
 
     @staticmethod
     def get_xml_dump(serial: str) -> Optional[str]:
@@ -231,6 +318,25 @@ class AdbManager:
         )
 
     @staticmethod
+    def swipe(serial: str, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 250) -> None:
+        """
+        Simulates a swipe event from (x1, y1) to (x2, y2).
+
+        Args:
+            serial (str): The device serial number.
+            x1 (int): Start x.
+            y1 (int): Start y.
+            x2 (int): End x.
+            y2 (int): End y.
+            duration_ms (int): Duration in milliseconds.
+        """
+        subprocess.Popen(
+            ['adb', '-s', serial, 'shell', 'input', 'swipe', str(x1), str(y1), str(x2), str(y2), str(duration_ms)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    @staticmethod
     def capture_snapshot(serial: str, folder: str) -> None:
         """
         Captures a complete snapshot (screenshot, XML dump, logcat) to the specified folder.
@@ -257,3 +363,12 @@ class AdbManager:
         res = AdbManager._run_cmd(['adb', '-s', serial, 'logcat', '-d', '-t', '500'])
         with open(os.path.join(folder, 'logcat.txt'), 'w', encoding='utf-8') as f: 
             f.write(res.stdout)
+
+        focus = AdbManager.get_current_focus(serial)
+        with open(os.path.join(folder, 'focus.txt'), 'w', encoding='utf-8') as f:
+            f.write(focus)
+
+        meta = AdbManager.get_device_meta(serial)
+        meta["focus"] = focus
+        with open(os.path.join(folder, 'meta.json'), 'w', encoding='utf-8') as f:
+            json.dump(meta, f, indent=2)

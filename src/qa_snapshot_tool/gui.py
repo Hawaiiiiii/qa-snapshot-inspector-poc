@@ -181,6 +181,9 @@ class MainWindow(QMainWindow):
         self.device_profiles = []
         self.auto_fit = True
         self.fps_counter = 0
+        self.stream_scale = 1.0
+        self.dump_bounds = None
+        self.last_frame_size = None
         
         self.setup_ui()
         self.refresh_devices()
@@ -451,6 +454,7 @@ class MainWindow(QMainWindow):
         self.active_device = self.combo_dev.itemData(idx)
         if self.active_device:
             self.log_sys(f"Active device set: {self.active_device}")
+            self.log_device_info()
 
     def toggle_live(self):
         if self.video_thread:
@@ -487,6 +491,7 @@ class MainWindow(QMainWindow):
             self.view.control_enabled = True
             self.btn_live.setText("STOP LIVE"); self.btn_live.setProperty("class", "danger")
             self.log_sys(f"Live mirror started on {self.active_device}")
+            self.log_device_info()
         
         self.polish_btn(self.btn_live)
 
@@ -494,6 +499,10 @@ class MainWindow(QMainWindow):
 
     def on_frame(self, data):
         img = QImage.fromData(data)
+        if img.isNull():
+            return
+        orig_w = img.width()
+        orig_h = img.height()
         if self.stream_max_size:
             if max(img.width(), img.height()) > self.stream_max_size:
                 img = img.scaled(
@@ -502,17 +511,38 @@ class MainWindow(QMainWindow):
                     Qt.KeepAspectRatio,
                     Qt.SmoothTransformation
                 )
+        if orig_w > 0 and orig_h > 0:
+            self.stream_scale = min(img.width() / orig_w, img.height() / orig_h)
+        else:
+            self.stream_scale = 1.0
+        self.last_frame_size = (img.width(), img.height())
         if not self.pixmap_item:
             self.pixmap_item = self.scene.addPixmap(QPixmap.fromImage(img))
             self.pixmap_item.setZValue(0)
             self.handle_resize()
         else:
             self.pixmap_item.setPixmap(QPixmap.fromImage(img))
+        if self.last_frame_size == (img.width(), img.height()):
+            pass
+        else:
+            self.last_frame_size = (img.width(), img.height())
+            self.log_sys(f"Live frame: {img.width()}x{img.height()} (dump bounds: {self.dump_bounds})")
         self.fps_counter += 1
 
     def update_fps(self):
         self.lbl_fps.setText(f"FPS: {self.fps_counter}")
         self.fps_counter = 0
+
+    def log_device_info(self):
+        if not self.active_device:
+            return
+        meta = AdbManager.get_device_meta(self.active_device)
+        self.log_sys(f"Device model: {meta.get('model', 'Unknown')} | serial: {meta.get('serialno', 'n/a')}")
+        power = meta.get("power", {})
+        self.log_sys(f"Power: wakefulness={power.get('wakefulness')} interactive={power.get('interactive')}")
+        display_ids = meta.get("display_ids", [])
+        if display_ids:
+            self.log_sys(f"SurfaceFlinger displays: {', '.join(display_ids)}")
 
     def on_tree_data(self, xml_str, changed):
         if not changed and self.root_node: return
@@ -525,6 +555,10 @@ class MainWindow(QMainWindow):
         
         root, parse_err = UixParser.parse(xml_str)
         self.root_node = root
+        if root and root.valid_bounds:
+            self.dump_bounds = root.rect
+        else:
+            self.dump_bounds = None
         
         self.tree.clear(); self.current_node_map = {}; self.node_to_item_map = {}; self.rect_map = []
         if root:
@@ -554,8 +588,9 @@ class MainWindow(QMainWindow):
         self.lbl_coords.setText(f"X: {x}, Y: {y}")
         # Hover detection
         best_node = None; best_area = float('inf')
+        sx, sy, ox, oy = self.get_bounds_transform()
         for rect, node in self.rect_map:
-            rx, ry, rw, rh = rect
+            rx, ry, rw, rh = self.scale_rect(rect, sx, sy, ox, oy)
             if rx <= x <= rx+rw and ry <= y <= ry+rh:
                 area = rw * rh
                 if area < best_area: best_area = area; best_node = node
@@ -566,7 +601,9 @@ class MainWindow(QMainWindow):
                 self.select_node(best_node, scroll=True)
 
     def handle_tap(self, x, y):
-        if self.video_thread: AdbManager.tap(self.active_device, x, y)
+        if self.video_thread:
+            dx, dy = self.to_device_coords(x, y)
+            AdbManager.tap(self.active_device, dx, dy)
         else:
             # Lock selection in offline mode
             node = self.find_node_at(x, y)
@@ -574,10 +611,14 @@ class MainWindow(QMainWindow):
                 self.toggle_lock(node)
 
     def handle_swipe(self, x1, y1, x2, y2):
-        if self.video_thread: AdbManager.swipe(self.active_device, x1, y1, x2, y2)
+        if self.video_thread:
+            dx1, dy1 = self.to_device_coords(x1, y1)
+            dx2, dy2 = self.to_device_coords(x2, y2)
+            AdbManager.swipe(self.active_device, dx1, dy1, dx2, dy2)
 
     def select_node(self, node, scroll=True):
-        x, y, w, h = node.rect
+        sx, sy, ox, oy = self.get_bounds_transform()
+        x, y, w, h = self.scale_rect(node.rect, sx, sy, ox, oy)
         self.rect_item.setRect(QRectF(x, y, w, h)); self.rect_item.show()
         
         # Populate Table (Restored missing data!)
@@ -684,6 +725,8 @@ class MainWindow(QMainWindow):
 
             self.pixmap_item = self.scene.addPixmap(QPixmap(png))
             self.handle_resize()
+            self.stream_scale = 1.0
+            self.last_frame_size = None
             
         # Load XML
         xml = os.path.join(path, "dump.uix")
@@ -872,14 +915,33 @@ class MainWindow(QMainWindow):
     def find_node_at(self, x: int, y: int):
         best_node = None
         best_area = float('inf')
+        sx, sy, ox, oy = self.get_bounds_transform()
         for rect, node in self.rect_map:
-            rx, ry, rw, rh = rect
+            rx, ry, rw, rh = self.scale_rect(rect, sx, sy, ox, oy)
             if rx <= x <= rx + rw and ry <= y <= ry + rh:
                 area = rw * rh
                 if area < best_area:
                     best_area = area
                     best_node = node
         return best_node
+
+    def get_bounds_transform(self):
+        if self.video_thread and self.dump_bounds and self.last_frame_size:
+            ox, oy, ow, oh = self.dump_bounds
+            fw, fh = self.last_frame_size
+            if ow > 0 and oh > 0 and fw > 0 and fh > 0:
+                return (fw / ow, fh / oh, ox, oy)
+        return (1.0, 1.0, 0.0, 0.0)
+
+    def scale_rect(self, rect, sx: float, sy: float, ox: float, oy: float):
+        rx, ry, rw, rh = rect
+        return ((rx - ox) * sx, (ry - oy) * sy, rw * sx, rh * sy)
+
+    def to_device_coords(self, x: int, y: int):
+        sx, sy, ox, oy = self.get_bounds_transform()
+        if sx <= 0 or sy <= 0:
+            return x, y
+        return int(x / sx + ox), int(y / sy + oy)
 
     def set_lock(self, node) -> None:
         self.locked_node = True
