@@ -87,6 +87,7 @@ class ScrcpyVideoSource(QObject):
         bitrate: int = 2_000_000,
         scrcpy_path: Optional[str] = None,
         hide_window: bool = False,
+        prefer_raw: bool = True,
     ) -> None:
         super().__init__()
         self.serial = serial
@@ -95,6 +96,7 @@ class ScrcpyVideoSource(QObject):
         self.bitrate = bitrate
         self.scrcpy_path = scrcpy_path
         self.hide_window = hide_window
+        self.prefer_raw = prefer_raw
         self.target_fps = max_fps
         self._thread: Optional[threading.Thread] = None
         self._proc: Optional[subprocess.Popen] = None
@@ -103,6 +105,7 @@ class ScrcpyVideoSource(QObject):
         self._supports_raw: Optional[bool] = None
         self._window_title = f"QUANTUM Scrcpy {serial}"
         self._moved_offscreen = False
+        self._scrcpy_bin: Optional[str] = None
 
     def start_stream(self) -> None:
         if self._running:
@@ -117,15 +120,25 @@ class ScrcpyVideoSource(QObject):
         if not scrcpy_bin:
             self._start_adb_fallback()
             return
+        self._scrcpy_bin = scrcpy_bin
         supports_raw = self._supports_raw
         if supports_raw is None:
             supports_raw = self._detect_raw_support(scrcpy_bin)
             self._supports_raw = supports_raw
 
-        if supports_raw:
+        if supports_raw and self.prefer_raw and self._pyav_available():
             self._start_raw_stream(scrcpy_bin)
         else:
+            if supports_raw and self.prefer_raw and not self._pyav_available():
+                self.log_line.emit("PyAV not installed; falling back to scrcpy window capture")
             self._start_window_capture(scrcpy_bin)
+
+    def _pyav_available(self) -> bool:
+        try:
+            import av  # type: ignore
+            return True
+        except Exception:
+            return False
 
     def _detect_raw_support(self, scrcpy_bin: str) -> bool:
         try:
@@ -162,6 +175,7 @@ class ScrcpyVideoSource(QObject):
             self._start_adb_fallback()
             return
 
+        self.log_line.emit("scrcpy raw H.264 decode active (PyAV)")
         self._thread = threading.Thread(target=self._read_raw_stream, daemon=True)
         self._thread.start()
         threading.Thread(target=self._read_stderr, daemon=True).start()
@@ -191,14 +205,16 @@ class ScrcpyVideoSource(QObject):
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
         except Exception:
             self._start_adb_fallback()
             return
 
+        self.log_line.emit("scrcpy window capture active (PrintWindow)")
         threading.Thread(target=self._read_stderr, daemon=True).start()
+        threading.Thread(target=self._read_stdout, daemon=True).start()
         self._thread = threading.Thread(target=self._capture_window_loop, daemon=True)
         self._thread.start()
 
@@ -223,9 +239,23 @@ class ScrcpyVideoSource(QObject):
                     self._running = False
                     break
         except ImportError:
-            self.log_line.emit("PyAV not installed. Install 'av' to decode scrcpy stream.")
+            self.log_line.emit("PyAV not installed. Falling back to scrcpy window capture.")
+            self._restart_as_window_capture()
         except Exception as ex:
             self.log_line.emit(f"scrcpy decode failed: {ex}")
+            self._restart_as_window_capture()
+
+    def _restart_as_window_capture(self) -> None:
+        if not self._scrcpy_bin:
+            self._start_adb_fallback()
+            return
+        try:
+            if self._proc:
+                self._proc.terminate()
+        except Exception:
+            pass
+        self._proc = None
+        self._start_window_capture(self._scrcpy_bin)
 
     def _capture_window_loop(self) -> None:
         hwnd = self._find_window_handle(self._window_title, timeout=5.0)
@@ -331,6 +361,22 @@ class ScrcpyVideoSource(QObject):
         except Exception:
             pass
 
+    def _read_stdout(self) -> None:
+        if not self._proc or not self._proc.stdout:
+            return
+        try:
+            for line in self._proc.stdout:
+                if not self._running:
+                    break
+                if isinstance(line, bytes):
+                    msg = line.decode("utf-8", errors="replace").strip()
+                else:
+                    msg = str(line).strip()
+                if msg:
+                    self.log_line.emit(msg)
+        except Exception:
+            pass
+
     def _start_adb_fallback(self) -> None:
         if self._fallback_source:
             return
@@ -393,6 +439,7 @@ class HierarchyThread(QThread):
         self.serial = serial
         self.running = True
         self.last_hash = ""
+        self._refresh_event = threading.Event()
 
     def run(self) -> None:
         while self.running:
@@ -414,11 +461,16 @@ class HierarchyThread(QThread):
             for _ in range(15): 
                 if not self.running: 
                     break
-                time.sleep(0.1)
+                if self._refresh_event.wait(timeout=0.1):
+                    self._refresh_event.clear()
+                    break
 
     def stop(self) -> None:
         self.running = False
         self.wait()
+
+    def request_refresh(self) -> None:
+        self._refresh_event.set()
 
 class LogcatThread(QThread):
     """ 

@@ -13,3 +13,5 @@ devices.json
 .vscode/*
 !.vscode/launch.json
 src/qa_snapshot_inspector.egg-info/
+THE_ANSWER.md
+current_dump.xml

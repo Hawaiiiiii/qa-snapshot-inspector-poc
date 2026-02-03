@@ -33,6 +33,18 @@ If the app crashes immediately after taking a snapshot:
 *   **Cause**: The app you are testing has `FLAG_SECURE` enabled. This is common in banking apps, Netflix, or login screens to prevent spyware.
 *   **Solution**: You must use a **debug/QA build** of your application where this security flag is disabled. We cannot bypass Android's OS-level security.
 
+### Secure surface limitations (AAOS / BMW)
+
+Some surfaces are protected by `FLAG_SECURE` or secure buffers (maps, PIN entry, protected media, system overlays). When this happens:
+
+*   The screenshot may be black.
+*   The UI hierarchy may miss secure layers.
+*   Header/footer overlays can be missing from the tree.
+
+QUANTUM will now log detected secure layers (best effort) in the System Log.
+
+**Mitigation**: Use a debug ECU build with `ro.secure=0` or a QA build that disables `FLAG_SECURE` for testing.
+
 > [!WARNING]
 > Do not attempt to bypass OS-level security protections.
 
@@ -41,3 +53,20 @@ If the app crashes immediately after taking a snapshot:
 *   **Symptom**: The red box is slightly to the left or right of the actual button.
 *   **Cause**: This often happens on devices with "Notch" cameras or hidden navigation bars.
 *   **Fix**: Try rotating the device to landscape and back to portrait, then capture again.
+
+## 5. Low FPS with scrcpy
+
+*   **Symptom**: The live view feels smooth but never reaches >30 FPS.
+*   **Cause**: Windows composition and off‑screen capture can cap throughput on some GPUs.
+*   **Fixes**:
+    *   Enable **Prefer raw H.264 stream (PyAV)** in the Live Mirror panel.
+    *   Ensure `av` is installed (`pip install -r requirements.txt`).
+    *   Reduce Max Size to 1080p or 720p for a stable frame rate.
+
+## 6. Remote ADB device farm not showing devices
+
+*   **Symptom**: No devices show up after setting a remote ADB server.
+*   **Fixes**:
+    *   Verify the host and port (default ADB port is 5037).
+    *   Confirm the remote server allows ADB connections from your machine.
+    *   Clear the ADB server field to return to local devices.

@@ -39,7 +39,7 @@ V1 PoC (current build).
 
 | Area | Capability |
 | --- | --- |
-| Live | ADB mirror with optional input control |
+| Live | Scrcpy (fast) or ADB mirror with optional input control |
 | Performance | Stream resolution presets (Native, 4K, 2K, 1080p, 720p, 1024) |
 | Offline | dump.uix picker + offline logcat view |
 | UI Tree | Auto-follow hover, expand on focus, selection lock (Enter/click) |
@@ -64,6 +64,8 @@ V1 PoC (current build).
 | Resource | Link |
 | --- | --- |
 | Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| scrcpy Integration | [docs/SCRCPY_INTEGRATION.md](docs/SCRCPY_INTEGRATION.md) |
+| Implementation Log | [docs/IMPLEMENTATION_LOG.md](docs/IMPLEMENTATION_LOG.md) |
 | Usage Guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
 | Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
@@ -139,7 +141,17 @@ python src/qa_snapshot_tool/main.py
 ## Notes
 
 - Offline mode: Open any snapshot folder with a dump and screenshot.
-- Online mode (optional): Connect a device and capture snapshots via ADB.
+- Online mode (optional): Connect a device and capture snapshots via ADB or scrcpy.
+
+## Live mirroring backend (scrcpy)
+
+QUANTUM uses **scrcpy** as the default high‑performance live mirror. We run scrcpy as a subprocess and capture frames from its window using the Windows API (PrintWindow) to keep the UI responsive and aligned with UI dumps.
+
+If scrcpy is not available, the tool falls back to slower ADB screenshot polling.
+
+## Acknowledgements
+
+This project integrates **scrcpy** by Genymobile (https://github.com/Genymobile/scrcpy). The scrcpy source is included under scrcpy-3.3.4/ and remains licensed under its original license (Apache License 2.0). We use scrcpy as an external middleware for video capture and do not modify its core behavior.
 
 ## Workflow (GitFlow)
 
