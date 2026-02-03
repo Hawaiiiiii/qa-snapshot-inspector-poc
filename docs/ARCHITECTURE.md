@@ -11,7 +11,7 @@ This document explains the inner workings of the **QUANTUM Inspector** in plain 
 
 The application acts as a bridge between your **Android Device** and your **Desktop**.
 
-1.  **The fetch**: We reach out to your phone (via a cable or Wi-Fi known as ADB) and grab two things:
+1.  **The fetch**: We reach out to your phone (via a cable or Wi‑Fi known as ADB) and grab two things:
     *   **The picture**: A visual screenshot of what you see.
     *   **The blueprint**: A hidden file called a "UI Dump" (XML) that lists every button, label, and image on the screen, along with its exact coordinates.
 2.  **The processing**: We take that Blueprint, clean it up (because sometimes Android gives us messy data), and map it directly onto the Picture.
@@ -28,6 +28,11 @@ Here is a breakdown of the main files you'll find in `src/qa_snapshot_tool/` and
 ### 2. The messenger (`adb_manager.py`)
 *   **What it does:** This is our translator. It speaks "Android Debug Bridge" (ADB). It runs commands like "Take a screenshot now" or "Tell me the device name".
 *   **Why it matters:** Without this, the app is blind. It handles the gritty details of usb connections.
+
+### 2.1 The live mirror (`live_mirror.py`)
+*   **What it does:** Provides the high‑performance live view.
+*   **Default backend:** scrcpy (runs as a subprocess). We detect its window and capture frames using the Windows PrintWindow API, even when the window is off‑screen.
+*   **Fallback:** ADB screenshot polling when scrcpy is unavailable.
 
 ### 3. The translator (`uix_parser.py`)
 *   **What it does:** Android describes screens in a format called XML. It's often deeply nested and complex. This parser reads that raw text and turns it into simple Python objects (`UiNode`) that represent things like "Submit Button" or "Header Text".

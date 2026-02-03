@@ -191,7 +191,7 @@ class ScrcpyVideoSource(QObject):
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
         except Exception:
@@ -199,6 +199,7 @@ class ScrcpyVideoSource(QObject):
             return
 
         threading.Thread(target=self._read_stderr, daemon=True).start()
+        threading.Thread(target=self._read_stdout, daemon=True).start()
         self._thread = threading.Thread(target=self._capture_window_loop, daemon=True)
         self._thread.start()
 
@@ -331,6 +332,22 @@ class ScrcpyVideoSource(QObject):
         except Exception:
             pass
 
+    def _read_stdout(self) -> None:
+        if not self._proc or not self._proc.stdout:
+            return
+        try:
+            for line in self._proc.stdout:
+                if not self._running:
+                    break
+                if isinstance(line, bytes):
+                    msg = line.decode("utf-8", errors="replace").strip()
+                else:
+                    msg = str(line).strip()
+                if msg:
+                    self.log_line.emit(msg)
+        except Exception:
+            pass
+
     def _start_adb_fallback(self) -> None:
         if self._fallback_source:
             return
@@ -393,6 +410,7 @@ class HierarchyThread(QThread):
         self.serial = serial
         self.running = True
         self.last_hash = ""
+        self._refresh_event = threading.Event()
 
     def run(self) -> None:
         while self.running:
@@ -414,11 +432,16 @@ class HierarchyThread(QThread):
             for _ in range(15): 
                 if not self.running: 
                     break
-                time.sleep(0.1)
+                if self._refresh_event.wait(timeout=0.1):
+                    self._refresh_event.clear()
+                    break
 
     def stop(self) -> None:
         self.running = False
         self.wait()
+
+    def request_refresh(self) -> None:
+        self._refresh_event.set()
 
 class LogcatThread(QThread):
     """ 

@@ -593,6 +593,8 @@ class MainWindow(QMainWindow):
                 )
                 self.video_thread.log_line.connect(self.log_sys)
                 self.log_sys(f"Live source: Scrcpy (fast) | bin: {self.scrcpy_path}")
+                self.log_sys(f"Scrcpy settings: max_size={self.stream_max_size or 'native'} fps={scrcpy_fps} bitrate=2000000 window={'shown' if self.chk_scrcpy_hide.isChecked() else 'hidden'}")
+                self.log_sys("Scrcpy output will appear below as it connects...")
             else:
                 self.video_thread = VideoThread(self.active_device, target_fps=target_fps)
                 self.log_sys("Live source: ADB (compat)")
@@ -608,7 +610,7 @@ class MainWindow(QMainWindow):
             self.log_thread.start()
             
             self.focus_thread = FocusMonitorThread(self.active_device)
-            self.focus_thread.focus_changed.connect(lambda f: self.lbl_focus.setText(f"Focus: {f}"))
+            self.focus_thread.focus_changed.connect(self.on_focus_changed)
             self.focus_thread.start()
             
             self.view.control_enabled = True
@@ -695,6 +697,8 @@ class MainWindow(QMainWindow):
         self.tree.clear(); self.current_node_map = {}; self.node_to_item_map = {}; self.rect_map = []
         if root:
             self.populate_tree(root, self.tree)
+            node_count = self.count_nodes(root)
+            self.log_sys(f"UI tree updated: {node_count} nodes")
             if parse_err:
                 self.log_sys("UI dump loaded but has zero valid bounds. The dump may be incomplete.")
         else:
@@ -716,6 +720,14 @@ class MainWindow(QMainWindow):
         if node.valid_bounds: self.rect_map.append((node.rect, node))
         for c in node.children: self.populate_tree(c, item)
 
+    def count_nodes(self, node) -> int:
+        if not node:
+            return 0
+        total = 1
+        for child in node.children:
+            total += self.count_nodes(child)
+        return total
+
     def on_mouse_hover(self, x, y):
         self.lbl_coords.setText(f"X: {x}, Y: {y}")
         # Hover detection
@@ -736,6 +748,7 @@ class MainWindow(QMainWindow):
         if self.video_thread:
             dx, dy = self.to_device_coords(x, y)
             AdbManager.tap(self.active_device, dx, dy)
+            self.request_tree_refresh()
         else:
             # Lock selection in offline mode
             node = self.find_node_at(x, y)
@@ -747,6 +760,7 @@ class MainWindow(QMainWindow):
             dx1, dy1 = self.to_device_coords(x1, y1)
             dx2, dy2 = self.to_device_coords(x2, y2)
             AdbManager.swipe(self.active_device, dx1, dy1, dx2, dy2)
+            self.request_tree_refresh()
 
     def select_node(self, node, scroll=True):
         sx, sy, ox, oy = self.get_bounds_transform()
@@ -819,6 +833,9 @@ class MainWindow(QMainWindow):
             AdbManager.capture_snapshot(self.active_device, path)
             if self.last_frame_image and not self.last_frame_image.isNull():
                 self.last_frame_image.save(os.path.join(path, "screenshot.png"), "PNG")
+                self.log_sys("Snapshot image saved from live frame cache")
+            else:
+                self.log_sys("Snapshot image saved from ADB screencap")
             self.load_snapshot(path)
             self.last_snapshot_path = path
             self.btn_recapture.setEnabled(True)
@@ -1120,6 +1137,16 @@ class MainWindow(QMainWindow):
         node = self.current_node_map.get(id(current))
         if node:
             self.select_node(node, scroll=False)
+
+    def on_focus_changed(self, focus: str) -> None:
+        self.lbl_focus.setText(f"Focus: {focus}")
+        self.request_tree_refresh("Focus changed", log=True)
+
+    def request_tree_refresh(self, reason: str = "", log: bool = False) -> None:
+        if self.xml_thread and hasattr(self.xml_thread, "request_refresh"):
+            self.xml_thread.request_refresh()
+            if log and reason:
+                self.log_sys(f"UI tree refresh requested: {reason}")
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
