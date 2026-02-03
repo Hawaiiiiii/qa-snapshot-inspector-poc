@@ -18,6 +18,31 @@ class AdbManager:
     """
     _display_ids_cache: Dict[str, List[str]] = {}
     _best_display_id: Dict[str, str] = {}
+    _adb_host: Optional[str] = None
+    _adb_port: Optional[int] = None
+
+    @staticmethod
+    def set_adb_server(host: str, port: int = 5037) -> None:
+        AdbManager._adb_host = host
+        AdbManager._adb_port = port
+
+    @staticmethod
+    def clear_adb_server() -> None:
+        AdbManager._adb_host = None
+        AdbManager._adb_port = None
+
+    @staticmethod
+    def _apply_adb_server(cmd: List[str]) -> List[str]:
+        if not cmd or cmd[0] != "adb":
+            return cmd
+        extra: List[str] = []
+        if AdbManager._adb_host:
+            extra += ["-H", AdbManager._adb_host]
+        if AdbManager._adb_port:
+            extra += ["-P", str(AdbManager._adb_port)]
+        if not extra:
+            return cmd
+        return ["adb"] + extra + cmd[1:]
 
     @staticmethod
     def getprop(serial: str, prop: str) -> str:
@@ -43,6 +68,7 @@ class AdbManager:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW # type: ignore
         
         try:
+            cmd = AdbManager._apply_adb_server(cmd)
             res = subprocess.run(
                 cmd, 
                 capture_output=True, 
@@ -73,6 +99,7 @@ class AdbManager:
             startupinfo = subprocess.STARTUPINFO() # type: ignore
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW # type: ignore
         try:
+            cmd = AdbManager._apply_adb_server(cmd)
             return subprocess.run(
                 cmd, 
                 capture_output=True, 
@@ -241,6 +268,7 @@ class AdbManager:
         now = int(time.time())
         model = AdbManager.getprop(serial, "ro.product.model")
         serialno = AdbManager.getprop(serial, "ro.serialno")
+        ro_secure = AdbManager.getprop(serial, "ro.secure")
         display_ids = AdbManager.get_display_ids(serial)
         display_info = AdbManager.get_display_summary(serial)
         power = AdbManager.get_power_summary(serial)
@@ -249,10 +277,41 @@ class AdbManager:
             "serial": serial,
             "serialno": serialno,
             "model": model,
+            "ro_secure": ro_secure,
             "display_ids": display_ids,
             "display_info": display_info,
             "power": power,
         }
+
+    @staticmethod
+    def get_surfaceflinger_layers(serial: str) -> List[Dict[str, Any]]:
+        """
+        Attempts to enumerate SurfaceFlinger layers and flag secure layers when possible.
+        Returns a list of dicts: {name, secure}.
+        """
+        layers: List[Dict[str, Any]] = []
+        try:
+            list_res = AdbManager._run_cmd(['adb', '-s', serial, 'shell', 'dumpsys', 'SurfaceFlinger', '--list'], timeout=10)
+            names = [l.strip() for l in (list_res.stdout or "").splitlines() if l.strip()]
+            layer_map = {n: {"name": n, "secure": False} for n in names}
+
+            # Parse --layers for Secure flags (best effort)
+            layers_res = AdbManager._run_cmd(['adb', '-s', serial, 'shell', 'dumpsys', 'SurfaceFlinger', '--layers'], timeout=12)
+            current_name: Optional[str] = None
+            for line in (layers_res.stdout or "").splitlines():
+                line = line.strip()
+                if line.startswith("Layer ") and "(" in line and ")" in line:
+                    try:
+                        current_name = line.split("(", 1)[1].rsplit(")", 1)[0].strip()
+                    except Exception:
+                        current_name = None
+                if current_name and line.startswith("Flags:") and "Secure" in line:
+                    if current_name in layer_map:
+                        layer_map[current_name]["secure"] = True
+            layers = list(layer_map.values())
+        except Exception:
+            return []
+        return layers
 
     @staticmethod
     def get_xml_dump(serial: str) -> Optional[str]:

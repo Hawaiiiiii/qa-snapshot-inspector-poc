@@ -29,6 +29,16 @@ In the top left corner of the app:
 > [!NOTE]
 > For Wi‑Fi devices, use the IP:port field and Connect IP.
 
+### Optional: device farm / remote ADB server
+
+If your devices are hosted in a remote lab or emulator farm, you can route all ADB commands through a remote server:
+
+1. Enter host:port in **ADB server host:port** (e.g., `10.10.20.12:5037`).
+2. Click **Set ADB Server**.
+3. Refresh the device list.
+
+To return to local ADB, clear the field and click **Set ADB Server**.
+
 ## Step 3: Taking a snapshot (the magic moment)
 
 1.  Pick up your phone and navigate to the screen you want to capture (e.g., a bug where the login button is broken).
