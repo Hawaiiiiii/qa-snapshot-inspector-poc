@@ -64,6 +64,8 @@ V1 PoC (current build).
 | Resource | Link |
 | --- | --- |
 | Architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| scrcpy Integration | [docs/SCRCPY_INTEGRATION.md](docs/SCRCPY_INTEGRATION.md) |
+| Implementation Log | [docs/IMPLEMENTATION_LOG.md](docs/IMPLEMENTATION_LOG.md) |
 | Usage Guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
 | Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 

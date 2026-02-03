@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
         self.live_source = "ADB"
         self.scrcpy_path = ""
         self.scrcpy_repo_path = str(Path(__file__).resolve().parents[2] / "scrcpy-3.3.4" / "scrcpy-3.3.4")
+        self.prefer_raw_scrcpy = True
         
         self.setup_ui()
         self.refresh_devices()
@@ -282,6 +283,14 @@ class MainWindow(QMainWindow):
         self.btn_reconnect.setToolTip("Reconnect to the selected recent device.")
         hist_row.addWidget(self.combo_history); hist_row.addWidget(self.btn_reconnect)
 
+        adb_row = QHBoxLayout()
+        self.input_adb_server = QLineEdit()
+        self.input_adb_server.setPlaceholderText("ADB server host:port (optional)")
+        self.input_adb_server.setToolTip("Route ADB through a remote server (device farm / emulator).")
+        self.btn_set_adb_server = QPushButton("Set ADB Server")
+        self.btn_set_adb_server.clicked.connect(self.set_adb_server)
+        adb_row.addWidget(self.input_adb_server); adb_row.addWidget(self.btn_set_adb_server)
+
         prof_row = QHBoxLayout()
         self.combo_profiles = QComboBox()
         self.combo_profiles.setToolTip("Device profiles from devices.json (optional).")
@@ -294,6 +303,7 @@ class MainWindow(QMainWindow):
         gl.addWidget(self.combo_dev); gl.addWidget(btn_ref)
         gl.addLayout(ip_row)
         gl.addLayout(hist_row)
+        gl.addLayout(adb_row)
         gl.addLayout(prof_row)
         gb_dev.setLayout(gl); l.addWidget(gb_dev)
         
@@ -334,6 +344,11 @@ class MainWindow(QMainWindow):
         self.chk_scrcpy_hide.setToolTip("Uncheck to keep scrcpy hidden. Check to show the scrcpy window.")
         self.chk_scrcpy_hide.stateChanged.connect(self.on_scrcpy_window_toggle)
 
+        self.chk_scrcpy_raw = QCheckBox("Prefer raw H.264 stream (PyAV)")
+        self.chk_scrcpy_raw.setChecked(True)
+        self.chk_scrcpy_raw.setToolTip("Uses raw H.264 decode for higher FPS when PyAV is installed.")
+        self.chk_scrcpy_raw.stateChanged.connect(self.on_scrcpy_window_toggle)
+
         res_row = QHBoxLayout()
         self.combo_res = QComboBox()
         self.combo_res.addItems(["Native", "4K", "2K", "1080p", "720p", "1024"])
@@ -343,7 +358,7 @@ class MainWindow(QMainWindow):
         res_row.addWidget(lbl_res); res_row.addWidget(self.combo_res)
 
         ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo); ll.addLayout(src_row); ll.addLayout(scrcpy_row)
-        ll.addWidget(self.chk_scrcpy_auto); ll.addWidget(self.chk_scrcpy_hide); ll.addLayout(res_row)
+        ll.addWidget(self.chk_scrcpy_auto); ll.addWidget(self.chk_scrcpy_hide); ll.addWidget(self.chk_scrcpy_raw); ll.addLayout(res_row)
         gb_live.setLayout(ll); l.addWidget(gb_live)
         
         # Snapshots
@@ -590,10 +605,17 @@ class MainWindow(QMainWindow):
                     bitrate=2_000_000,
                     scrcpy_path=self.scrcpy_path or None,
                     hide_window=(not self.chk_scrcpy_hide.isChecked()) if hasattr(self, "chk_scrcpy_hide") else True,
+                    prefer_raw=self.chk_scrcpy_raw.isChecked() if hasattr(self, "chk_scrcpy_raw") else True,
                 )
                 self.video_thread.log_line.connect(self.log_sys)
                 self.log_sys(f"Live source: Scrcpy (fast) | bin: {self.scrcpy_path}")
-                self.log_sys(f"Scrcpy settings: max_size={self.stream_max_size or 'native'} fps={scrcpy_fps} bitrate=2000000 window={'shown' if self.chk_scrcpy_hide.isChecked() else 'hidden'}")
+                self.log_sys(
+                    "Scrcpy settings: "
+                    f"max_size={self.stream_max_size or 'native'} "
+                    f"fps={scrcpy_fps} bitrate=2000000 "
+                    f"window={'shown' if self.chk_scrcpy_hide.isChecked() else 'hidden'} "
+                    f"raw={'on' if self.chk_scrcpy_raw.isChecked() else 'off'}"
+                )
                 self.log_sys("Scrcpy output will appear below as it connects...")
             else:
                 self.video_thread = VideoThread(self.active_device, target_fps=target_fps)
@@ -669,6 +691,11 @@ class MainWindow(QMainWindow):
             return
         meta = AdbManager.get_device_meta(self.active_device)
         self.log_sys(f"Device model: {meta.get('model', 'Unknown')} | serial: {meta.get('serialno', 'n/a')}")
+        ro_secure = meta.get("ro_secure", "unknown")
+        if ro_secure in ("0", "1"):
+            self.log_sys(f"Device security: ro.secure={ro_secure} ({'debug' if ro_secure == '0' else 'production'})")
+        else:
+            self.log_sys(f"Device security: ro.secure={ro_secure}")
         power = meta.get("power", {})
         self.log_sys(f"Power: wakefulness={power.get('wakefulness')} interactive={power.get('interactive')}")
         display_ids = meta.get("display_ids", [])
@@ -677,6 +704,24 @@ class MainWindow(QMainWindow):
         display_info = meta.get("display_info", [])
         if display_info:
             self.log_sys(f"Display info count: {len(display_info)}")
+        self.log_secure_layers()
+
+    def log_secure_layers(self) -> None:
+        if not self.active_device:
+            return
+        layers = AdbManager.get_surfaceflinger_layers(self.active_device)
+        if not layers:
+            self.log_sys("SurfaceFlinger layers: unavailable")
+            return
+        secure_layers = [l for l in layers if l.get("secure")]
+        if secure_layers:
+            self.log_sys(f"⚠️ Secure layers detected: {len(secure_layers)} (UI dumps may be incomplete)")
+            for l in secure_layers[:8]:
+                self.log_sys(f"  - {l.get('name')}")
+            if len(secure_layers) > 8:
+                self.log_sys(f"  - ...and {len(secure_layers) - 8} more")
+        else:
+            self.log_sys("SurfaceFlinger layers: no secure layers detected")
 
     def on_tree_data(self, xml_str, changed):
         if not changed and self.root_node: return
@@ -745,8 +790,13 @@ class MainWindow(QMainWindow):
                 self.select_node(best_node, scroll=True)
 
     def handle_tap(self, x, y):
+        # Always log the tap coordinate to help users who need manual test coordinates (System UI workaround)
         if self.video_thread:
             dx, dy = self.to_device_coords(x, y)
+            # Log as raw coords AND as a copy-pasteable Java snippet
+            self.log_sys(f"👆 Tap({int(dx)}, {int(dy)})")
+            self.log_sys(f"   📋 Java: clickSystemCoordinate({int(dx)}, {int(dy)});")
+            
             AdbManager.tap(self.active_device, dx, dy)
             self.request_tree_refresh()
         else:
@@ -759,6 +809,7 @@ class MainWindow(QMainWindow):
         if self.video_thread:
             dx1, dy1 = self.to_device_coords(x1, y1)
             dx2, dy2 = self.to_device_coords(x2, y2)
+            self.log_sys(f"👆 Swipe Input: ({int(dx1)}, {int(dy1)}) -> ({int(dx2)}, {int(dy2)})")
             AdbManager.swipe(self.active_device, dx1, dy1, dx2, dy2)
             self.request_tree_refresh()
 
@@ -959,6 +1010,27 @@ class MainWindow(QMainWindow):
             return
         res = AdbManager.connect_ip(addr)
         self.log_sys(f"ADB connect {addr}: {res}")
+        self.refresh_devices()
+
+    def set_adb_server(self) -> None:
+        raw = self.input_adb_server.text().strip()
+        if not raw:
+            AdbManager.clear_adb_server()
+            self.log_sys("ADB server reset to local")
+            self.refresh_devices()
+            return
+        if ":" in raw:
+            host, port_str = raw.split(":", 1)
+            try:
+                port = int(port_str)
+            except ValueError:
+                self.log_sys("ADB server format invalid (expected host:port)")
+                return
+        else:
+            host = raw
+            port = 5037
+        AdbManager.set_adb_server(host, port)
+        self.log_sys(f"ADB server set to {host}:{port}")
         self.refresh_devices()
 
     def reconnect_history(self) -> None:
