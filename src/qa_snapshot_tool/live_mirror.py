@@ -12,6 +12,7 @@ from PySide6.QtCore import QThread, Signal, QObject
 from PySide6.QtGui import QImage
 from PySide6.QtGui import QGuiApplication
 import hashlib
+import os
 import time
 import subprocess
 import threading
@@ -60,7 +61,9 @@ class VideoThread(QThread):
 
     def stop(self) -> None:
         self.running = False
-        self.wait()
+        if not self.wait(1200):
+            self.terminate()
+            self.wait(800)
 
     def start_stream(self) -> None:
         self.start()
@@ -88,6 +91,8 @@ class ScrcpyVideoSource(QObject):
         scrcpy_path: Optional[str] = None,
         hide_window: bool = False,
         prefer_raw: bool = True,
+        display_id: Optional[str] = None,
+        server_path: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.serial = serial
@@ -97,6 +102,8 @@ class ScrcpyVideoSource(QObject):
         self.scrcpy_path = scrcpy_path
         self.hide_window = hide_window
         self.prefer_raw = prefer_raw
+        self.display_id = display_id
+        self.server_path = server_path
         self.target_fps = max_fps
         self._thread: Optional[threading.Thread] = None
         self._proc: Optional[subprocess.Popen] = None
@@ -106,6 +113,9 @@ class ScrcpyVideoSource(QObject):
         self._window_title = f"QUANTUM Scrcpy {serial}"
         self._moved_offscreen = False
         self._scrcpy_bin: Optional[str] = None
+        self._last_frame_ts: float = 0.0
+        self._raw_requested = False
+        self._raw_failed = False
 
     def start_stream(self) -> None:
         if self._running:
@@ -121,16 +131,14 @@ class ScrcpyVideoSource(QObject):
             self._start_adb_fallback()
             return
         self._scrcpy_bin = scrcpy_bin
-        supports_raw = self._supports_raw
-        if supports_raw is None:
-            supports_raw = self._detect_raw_support(scrcpy_bin)
-            self._supports_raw = supports_raw
-
-        if supports_raw and self.prefer_raw and self._pyav_available():
+        if self.prefer_raw and self._pyav_available():
+            self._raw_requested = True
             self._start_raw_stream(scrcpy_bin)
         else:
-            if supports_raw and self.prefer_raw and not self._pyav_available():
+            if self.prefer_raw and not self._pyav_available():
                 self.log_line.emit("PyAV not installed; falling back to scrcpy window capture")
+            if not self.prefer_raw:
+                self.log_line.emit("scrcpy raw video disabled by user; using window capture")
             self._start_window_capture(scrcpy_bin)
 
     def _pyav_available(self) -> bool:
@@ -158,6 +166,8 @@ class ScrcpyVideoSource(QObject):
             "--raw-video=-",
             "--no-audio",
         ]
+        if self.display_id:
+            cmd += ["--display-id", str(self.display_id)]
         if self.max_size:
             cmd += ["--max-size", str(int(self.max_size))]
         if self.max_fps:
@@ -166,10 +176,17 @@ class ScrcpyVideoSource(QObject):
             cmd += ["--video-bit-rate", str(int(self.bitrate))]
 
         try:
+            env = os.environ.copy()
+            if self.server_path:
+                env["SCRCPY_SERVER_PATH"] = self.server_path
+            msys_bin = "C:/msys64/mingw64/bin"
+            if os.path.exists(msys_bin) and "scrcpy-3.3.4" in scrcpy_bin and "x" in scrcpy_bin:
+                env["PATH"] = f"{msys_bin};{env.get('PATH','')}"
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
         except Exception:
             self._start_adb_fallback()
@@ -193,6 +210,8 @@ class ScrcpyVideoSource(QObject):
             "--no-control",
             "--no-audio",
         ]
+        if self.display_id:
+            cmd += ["--display-id", str(self.display_id)]
         if self.hide_window:
             cmd += ["--window-x", "-32000", "--window-y", "-32000"]
         if self.max_size:
@@ -203,10 +222,17 @@ class ScrcpyVideoSource(QObject):
             cmd += ["--video-bit-rate", str(int(self.bitrate))]
 
         try:
+            env = os.environ.copy()
+            if self.server_path:
+                env["SCRCPY_SERVER_PATH"] = self.server_path
+            msys_bin = "C:/msys64/mingw64/bin"
+            if os.path.exists(msys_bin) and "scrcpy-3.3.4" in scrcpy_bin and "x" in scrcpy_bin:
+                env["PATH"] = f"{msys_bin};{env.get('PATH','')}"
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=env,
             )
         except Exception:
             self._start_adb_fallback()
@@ -235,6 +261,7 @@ class ScrcpyVideoSource(QObject):
                 qimg = QImage(img.data, w, h, bytes_per_line, QImage.Format_BGR888)
                 try:
                     self.frame_ready.emit(qimg.copy())
+                    self._last_frame_ts = time.time()
                 except RuntimeError:
                     self._running = False
                     break
@@ -255,15 +282,21 @@ class ScrcpyVideoSource(QObject):
         except Exception:
             pass
         self._proc = None
+        self._raw_requested = False
         self._start_window_capture(self._scrcpy_bin)
 
     def _capture_window_loop(self) -> None:
-        hwnd = self._find_window_handle(self._window_title, timeout=5.0)
+        hwnd = self._find_window_handle(self._window_title, timeout=12.0)
         if not hwnd:
+            if self._proc and self._proc.poll() is not None:
+                self.log_line.emit(f"scrcpy exited before window appeared (code {self._proc.returncode})")
+                self._start_adb_fallback()
+                return
             self.log_line.emit("scrcpy window not found for capture")
             return
         target_fps = max(1, int(self.max_fps)) if self.max_fps else 30
         frame_budget = 1.0 / target_fps
+        start_ts = time.time()
         while self._running:
             start = time.time()
             img = self._capture_window_image(hwnd)
@@ -273,9 +306,14 @@ class ScrcpyVideoSource(QObject):
                     self._moved_offscreen = True
                 try:
                     self.frame_ready.emit(img)
+                    self._last_frame_ts = time.time()
                 except RuntimeError:
                     self._running = False
                     break
+            if self._last_frame_ts == 0.0 and (time.time() - start_ts) > 3.0:
+                self.log_line.emit("No frames received from scrcpy window; falling back to ADB capture")
+                self._start_adb_fallback()
+                return
             elapsed = time.time() - start
             if elapsed < frame_budget:
                 time.sleep(frame_budget - elapsed)
@@ -290,6 +328,37 @@ class ScrcpyVideoSource(QObject):
                 hwnd = user32.FindWindowW(None, title)
                 if hwnd:
                     return int(hwnd)
+                time.sleep(0.1)
+        except Exception:
+            pass
+        if self._proc and self._proc.pid:
+            return self._find_window_handle_by_pid(self._proc.pid, timeout=timeout)
+        return 0
+
+    def _find_window_handle_by_pid(self, pid: int, timeout: float = 5.0) -> int:
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            end = time.time() + timeout
+            hwnd_found = ctypes.c_void_p(0)
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+            def enum_proc(hwnd, lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                proc_id = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+                if proc_id.value != pid:
+                    return True
+                hwnd_found.value = hwnd
+                return False
+
+            while time.time() < end and self._running:
+                hwnd_found.value = 0
+                user32.EnumWindows(enum_proc, 0)
+                if hwnd_found.value:
+                    return int(hwnd_found.value)
                 time.sleep(0.1)
         except Exception:
             pass
@@ -358,6 +427,15 @@ class ScrcpyVideoSource(QObject):
                 msg = line.decode("utf-8", errors="replace").strip()
                 if msg:
                     self.log_line.emit(msg)
+                    if self._raw_requested and not self._raw_failed:
+                        lower = msg.lower()
+                        if "raw-video" in lower and ("unknown" in lower or "unrecognized" in lower or "invalid" in lower):
+                            self._raw_failed = True
+                            self.log_line.emit("scrcpy raw video not supported; falling back to window capture")
+                            self._restart_as_window_capture()
+                            return
+            if self._proc and self._proc.poll() is not None:
+                self.log_line.emit(f"scrcpy exited (code {self._proc.returncode})")
         except Exception:
             pass
 
@@ -389,8 +467,11 @@ class ScrcpyVideoSource(QObject):
         if self._proc:
             try:
                 self._proc.terminate()
-            except Exception:
-                pass
+            except Exception as exc:
+                now = time.time()
+                if (now - self._last_error_ts) > 5.0:
+                    self._last_error_ts = now
+                    self.dump_error.emit(f"UI dump error: {type(exc).__name__}")
             self._proc = None
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
@@ -433,6 +514,7 @@ class HierarchyThread(QThread):
     Polls for UI XML changes at a lower frequency than video.
     """
     tree_ready = Signal(str, bool) # Emits (XML String, is_changed)
+    dump_error = Signal(str)
     
     def __init__(self, serial: str):
         super().__init__()
@@ -440,6 +522,7 @@ class HierarchyThread(QThread):
         self.running = True
         self.last_hash = ""
         self._refresh_event = threading.Event()
+        self._last_error_ts = 0.0
 
     def run(self) -> None:
         while self.running:
@@ -454,6 +537,12 @@ class HierarchyThread(QThread):
                     else:
                         # Optional: Emit False if you want to confirm "still same"
                         pass
+                else:
+                    err = AdbManager.get_last_dump_error()
+                    now = time.time()
+                    if err and (now - self._last_error_ts) > 5.0:
+                        self._last_error_ts = now
+                        self.dump_error.emit(f"UI dump failed: {err}")
             except Exception:
                 pass
             
@@ -516,7 +605,9 @@ class LogcatThread(QThread):
         self.running = False
         if self.proc: 
             self.proc.terminate()
-        self.wait()
+        if not self.wait(1200):
+            self.terminate()
+            self.wait(800)
 
 class FocusMonitorThread(QThread):
     """ 
@@ -541,4 +632,6 @@ class FocusMonitorThread(QThread):
             
     def stop(self) -> None:
         self.running = False
-        self.wait()
+        if not self.wait(1200):
+            self.terminate()
+            self.wait(800)
