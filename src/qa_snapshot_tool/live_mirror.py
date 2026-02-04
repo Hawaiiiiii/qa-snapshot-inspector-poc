@@ -467,6 +467,13 @@ class ScrcpyVideoSource(QObject):
         if self._proc:
             try:
                 self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=2.0)
+                except Exception:
+                    try:
+                        self._proc.kill()
+                    except Exception:
+                        pass
             except Exception as exc:
                 now = time.time()
                 if (now - self._last_error_ts) > 5.0:

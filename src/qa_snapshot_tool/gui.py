@@ -23,13 +23,15 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTreeWidget, QTreeWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QFileDialog, QTextEdit,
     QGroupBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
-    QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication, QLineEdit, QCheckBox, QMessageBox
+    QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication, QLineEdit, QCheckBox, QMessageBox,
+    QMenu, QToolButton, QScrollArea, QAbstractItemView
 )
-from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor, QLinearGradient, QPalette
+from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor, QLinearGradient, QPalette, QGuiApplication
 from PySide6.QtCore import QUrl
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QVideoSink
 from PySide6.QtCore import Qt, QRectF, Signal, QTimer
 
+from qa_snapshot_tool.utils import get_app_root
 from qa_snapshot_tool.uix_parser import UixParser
 from qa_snapshot_tool.locator_suggester import LocatorSuggester
 from qa_snapshot_tool.adb_manager import AdbManager
@@ -166,7 +168,7 @@ class MainWindow(QMainWindow):
         self.locked_node_id = None
         self.auto_follow_hover = True
         self.stream_max_size = None
-        self.ambient_enabled = True
+        self.ambient_enabled = False
         self.ambient_phase = 0.0
         self.ambient_offset = 0.0
         self.ambient_widgets = []
@@ -174,7 +176,6 @@ class MainWindow(QMainWindow):
         self.ambient_player = None
         self.ambient_audio = None
         self.ambient_sink = None
-        self.ambient_enabled = True
         self.ambient_last_hash = None
         self.ambient_prev_image = None
         self.ambient_last_frame_ts = 0.0
@@ -195,11 +196,13 @@ class MainWindow(QMainWindow):
         self.scrcpy_path = ""
         self.selected_display_id = None
         self._root_prompted = False
-        scrcpy_root = Path(__file__).resolve().parents[2] / "scrcpy-3.3.4"
+        scrcpy_root = get_app_root() / "scrcpy-3.3.4"
         scrcpy_git_repo = scrcpy_root / "scrcpy-git"
         scrcpy_snapshot_repo = scrcpy_root / "scrcpy-3.3.4"
         self.scrcpy_repo_path = str(scrcpy_git_repo if (scrcpy_git_repo / ".git").exists() else scrcpy_snapshot_repo)
         self.prefer_raw_scrcpy = True
+        self._initial_resize_done = False
+        self.syslog_auto_scroll = True
         
         self.setup_ui()
         self.refresh_devices()
@@ -210,6 +213,33 @@ class MainWindow(QMainWindow):
 
         self.ambient_timer = QTimer()
         self.ambient_timer.timeout.connect(self.update_ambient)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._initial_resize_done:
+            return
+        screen = QGuiApplication.primaryScreen()
+        if not screen:
+            self._initial_resize_done = True
+            return
+        available = screen.availableGeometry()
+        target_w = max(1200, int(available.width() * 0.95))
+        target_h = max(800, int(available.height() * 0.95))
+        target_w = min(target_w, available.width())
+        target_h = min(target_h, available.height())
+        self.resize(target_w, target_h)
+        self.move(available.left(), available.top())
+        self._initial_resize_done = True
+
+    def center_window(self) -> None:
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if not screen:
+            return
+        available = screen.availableGeometry()
+        frame = self.frameGeometry()
+        target_x = available.left() + max(0, (available.width() - frame.width()) // 2)
+        target_y = available.top() + max(0, (available.height() - frame.height()) // 2)
+        self.move(target_x, target_y)
 
     def setup_ui(self):
         central = QWidget(); central_lay = QVBoxLayout(central); central_lay.setContentsMargins(0,0,0,0)
@@ -225,10 +255,19 @@ class MainWindow(QMainWindow):
         
         act_fit = QAction("Fit Screen", self); act_fit.triggered.connect(self.enable_fit)
         act_11 = QAction("1:1 Pixel", self); act_11.triggered.connect(self.disable_fit)
+        act_center = QAction("Center Window", self); act_center.triggered.connect(self.center_window)
         
         tb.addWidget(self.lbl_fps); tb.addWidget(self.lbl_coords); tb.addSeparator(); tb.addWidget(self.lbl_focus)
         tb.addSeparator(); tb.addWidget(self.lbl_tree_status)
-        tb.addSeparator(); tb.addAction(act_fit); tb.addAction(act_11)
+        tb.addSeparator(); tb.addAction(act_fit); tb.addAction(act_11); tb.addAction(act_center)
+
+        self.panels_menu = QMenu("Panels", self)
+        self.menuBar().addMenu(self.panels_menu)
+        panels_button = QToolButton()
+        panels_button.setText("Panels")
+        panels_button.setMenu(self.panels_menu)
+        panels_button.setPopupMode(QToolButton.InstantPopup)
+        tb.addSeparator(); tb.addWidget(panels_button)
         central_lay.addWidget(tb)
         
         # View
@@ -258,7 +297,12 @@ class MainWindow(QMainWindow):
         self.setup_inspector_dock()
         self.setup_syslog_dock()
 
-        self.init_ambient_video()
+        for dock in (self.dock_env, self.dock_tree, self.dock_inspector, self.dock_syslog):
+            dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+            self.panels_menu.addAction(dock.toggleViewAction())
+
+        if self.ambient_enabled:
+            self.init_ambient_video()
 
         # Overlay Items
         self.rect_item = QGraphicsRectItem()
@@ -413,7 +457,7 @@ class MainWindow(QMainWindow):
         self.chk_auto_follow.setToolTip("Auto-scroll the UI Tree to the element under the cursor.")
 
         self.chk_ambient = QCheckBox("Ambient Video")
-        self.chk_ambient.setChecked(True)
+        self.chk_ambient.setChecked(False)
         self.chk_ambient.stateChanged.connect(self.toggle_ambient_video)
         self.chk_ambient.setToolTip("Animate the dock panels only. Live view stays clean.")
 
@@ -426,7 +470,8 @@ class MainWindow(QMainWindow):
         gb_opts.setLayout(ol); l.addWidget(gb_opts)
         
         l.addStretch()
-        d.setWidget(self.wrap_ambient_panel(w)); self.addDockWidget(Qt.LeftDockWidgetArea, d)
+        scroll = self.wrap_scroll_area(w)
+        d.setWidget(self.wrap_ambient_panel(scroll)); self.addDockWidget(Qt.LeftDockWidgetArea, d)
         self.load_device_profiles()
 
     def setup_tree_dock(self):
@@ -449,6 +494,10 @@ class MainWindow(QMainWindow):
         self.tbl_props.setHorizontalHeaderLabels(["Property", "Value"])
         self.tbl_props.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.tbl_props.verticalHeader().setVisible(False)
+        self.tbl_props.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.tbl_props.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.tbl_props.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.tbl_props.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         tabs.addTab(self.tbl_props, "Node Details")
         
         # Selectors Tab (Leandro's Requirement)
@@ -475,6 +524,7 @@ class MainWindow(QMainWindow):
         self.register_ambient_widget(d)
         self.txt_sys = QTextEdit(); self.txt_sys.setReadOnly(True)
         self.txt_sys.setToolTip("Internal app events, status updates, and diagnostics.")
+        self.txt_sys.verticalScrollBar().valueChanged.connect(self.on_syslog_scroll)
         d.setWidget(self.wrap_ambient_panel(self.txt_sys)); self.addDockWidget(Qt.BottomDockWidgetArea, d)
 
     # --- Core Logic ---
@@ -484,6 +534,13 @@ class MainWindow(QMainWindow):
             return
         ts = time.strftime("%H:%M:%S")
         self.txt_sys.append(f"[{ts}] {message}")
+        if self.syslog_auto_scroll:
+            bar = self.txt_sys.verticalScrollBar()
+            bar.setValue(bar.maximum())
+
+    def on_syslog_scroll(self, value: int) -> None:
+        bar = self.txt_sys.verticalScrollBar()
+        self.syslog_auto_scroll = value >= bar.maximum()
 
     def browse_scrcpy(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -554,7 +611,7 @@ class MainWindow(QMainWindow):
         repo_path = Path(self.scrcpy_repo_path)
         git_dir = repo_path / ".git"
         if not repo_path.exists() or not git_dir.exists():
-            scrcpy_root = Path(__file__).resolve().parents[2] / "scrcpy-3.3.4"
+            scrcpy_root = get_app_root() / "scrcpy-3.3.4"
             git_repo = scrcpy_root / "scrcpy-git"
             if not git_repo.exists() or not (git_repo / ".git").exists():
                 try:
@@ -740,8 +797,17 @@ class MainWindow(QMainWindow):
         self.ambient_panels.append(panel)
         return panel
 
+    def wrap_scroll_area(self, widget: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        area.setWidget(widget)
+        return area
+
     def init_ambient_video(self) -> None:
-        root = Path(__file__).resolve().parents[2]
+        root = get_app_root()
         video_path = root / "assets" / "fui_hmi_ux" / "UX.webm"
         if not video_path.exists():
             self.log_sys("Ambient video not found. Background disabled.")
@@ -1418,6 +1484,13 @@ class MainWindow(QMainWindow):
             self.apply_chrome_overlay(translucent=False)
             self.ambient_static_frame = None
         else:
+            if not self.ambient_player:
+                self.init_ambient_video()
+                if not self.ambient_enabled:
+                    self.chk_ambient.blockSignals(True)
+                    self.chk_ambient.setChecked(False)
+                    self.chk_ambient.blockSignals(False)
+                    return
             if self.ambient_player:
                 self.ambient_player.play()
             self.apply_chrome_overlay(translucent=True)
