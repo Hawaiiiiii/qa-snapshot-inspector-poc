@@ -20,6 +20,7 @@ if __name__ == "__main__" and __package__ is None:
 
 from qa_snapshot_tool.gui import MainWindow
 from qa_snapshot_tool.theme import Theme
+from qa_snapshot_tool.utils import get_app_root
 
 def main() -> None:
     """
@@ -27,11 +28,12 @@ def main() -> None:
     Initializes the Qt Application context and event loop.
     """
     try:
-        QLoggingCategory.setFilterRules("qt.multimedia.*=false\nqt.multimedia.ffmpeg.*=false")
+        QLoggingCategory.setFilterRules("qt.multimedia.*=false\\nqt.multimedia.ffmpeg.*=false")
         app = QApplication(sys.argv)
         app.setApplicationName("QUANTUM Inspector")
 
-        fonts_dir = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+        root = get_app_root()
+        fonts_dir = root / "assets" / "fonts"
         if fonts_dir.exists():
             loaded_families = []
             for font_path in list(fonts_dir.rglob("*.ttf")) + list(fonts_dir.rglob("*.otf")):
@@ -53,7 +55,7 @@ def main() -> None:
         app.setStyleSheet(Theme.get_stylesheet())
 
         window = MainWindow()
-        icon_path = Path(__file__).resolve().parents[2] / "assets" / "icons" / "quantum.svg"
+        icon_path = root / "assets" / "icons" / "quantum.svg"
         if icon_path.exists():
             window.setWindowIcon(QIcon(str(icon_path)))
         window.show()
