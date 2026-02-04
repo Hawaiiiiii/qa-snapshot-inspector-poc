@@ -13,6 +13,10 @@ import glob
 import time
 import json
 import math
+import re
+import shutil
+import threading
+import urllib.request
 import subprocess
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -184,11 +188,17 @@ class MainWindow(QMainWindow):
         self.fps_counter = 0
         self.stream_scale = 1.0
         self.dump_bounds = None
+        self.device_bounds = None
         self.last_frame_size = None
         self.last_frame_image = None
         self.live_source = "ADB"
         self.scrcpy_path = ""
-        self.scrcpy_repo_path = str(Path(__file__).resolve().parents[2] / "scrcpy-3.3.4" / "scrcpy-3.3.4")
+        self.selected_display_id = None
+        self._root_prompted = False
+        scrcpy_root = Path(__file__).resolve().parents[2] / "scrcpy-3.3.4"
+        scrcpy_git_repo = scrcpy_root / "scrcpy-git"
+        scrcpy_snapshot_repo = scrcpy_root / "scrcpy-3.3.4"
+        self.scrcpy_repo_path = str(scrcpy_git_repo if (scrcpy_git_repo / ".git").exists() else scrcpy_snapshot_repo)
         self.prefer_raw_scrcpy = True
         
         self.setup_ui()
@@ -211,11 +221,13 @@ class MainWindow(QMainWindow):
         self.lbl_fps = QLabel("FPS: 0"); self.lbl_fps.setStyleSheet("color: #7c8aa3; font-weight: 600;")
         self.lbl_coords = QLabel("X: 0, Y: 0"); self.lbl_coords.setStyleSheet("color: #c1c7d2; font-family: monospace;")
         self.lbl_focus = QLabel("Focus: -"); self.lbl_focus.setStyleSheet("color: #7db6ff; font-weight: 600;")
+        self.lbl_tree_status = QLabel("Tree: Unknown"); self.lbl_tree_status.setStyleSheet("color: #9aa7bd; font-weight: 600;")
         
         act_fit = QAction("Fit Screen", self); act_fit.triggered.connect(self.enable_fit)
         act_11 = QAction("1:1 Pixel", self); act_11.triggered.connect(self.disable_fit)
         
         tb.addWidget(self.lbl_fps); tb.addWidget(self.lbl_coords); tb.addSeparator(); tb.addWidget(self.lbl_focus)
+        tb.addSeparator(); tb.addWidget(self.lbl_tree_status)
         tb.addSeparator(); tb.addAction(act_fit); tb.addAction(act_11)
         central_lay.addWidget(tb)
         
@@ -330,7 +342,7 @@ class MainWindow(QMainWindow):
         self.btn_scrcpy.clicked.connect(self.browse_scrcpy)
         scrcpy_row.addWidget(lbl_scrcpy); scrcpy_row.addWidget(self.input_scrcpy); scrcpy_row.addWidget(self.btn_scrcpy)
 
-        default_scrcpy = self.find_scrcpy_binary()
+        default_scrcpy = shutil.which("scrcpy")
         if default_scrcpy:
             self.input_scrcpy.setText(default_scrcpy)
             self.scrcpy_path = default_scrcpy
@@ -357,9 +369,30 @@ class MainWindow(QMainWindow):
         lbl_res = QLabel("Max Size"); lbl_res.setToolTip("Maximum stream width/height (preserves aspect ratio).")
         res_row.addWidget(lbl_res); res_row.addWidget(self.combo_res)
 
+        display_row = QHBoxLayout()
+        lbl_display = QLabel("Display")
+        self.combo_display = QComboBox()
+        self.combo_display.setToolTip("Select which display to capture for scrcpy/ADB dumps. Auto uses the best match.")
+        self.combo_display.currentIndexChanged.connect(self.on_display_change)
+        display_row.addWidget(lbl_display); display_row.addWidget(self.combo_display)
+
         ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo); ll.addLayout(src_row); ll.addLayout(scrcpy_row)
-        ll.addWidget(self.chk_scrcpy_auto); ll.addWidget(self.chk_scrcpy_hide); ll.addWidget(self.chk_scrcpy_raw); ll.addLayout(res_row)
+        ll.addWidget(self.chk_scrcpy_auto); ll.addWidget(self.chk_scrcpy_hide); ll.addWidget(self.chk_scrcpy_raw); ll.addLayout(res_row); ll.addLayout(display_row)
         gb_live.setLayout(ll); l.addWidget(gb_live)
+
+        # Device Actions
+        gb_actions = QGroupBox("Device Actions"); al = QVBoxLayout()
+        self.btn_wake = QPushButton("Wake Screen")
+        self.btn_wake.setToolTip("Turns the device screen on and attempts to unlock it.")
+        self.btn_wake.clicked.connect(self.wake_screen)
+        self.btn_sleep = QPushButton("Sleep Screen")
+        self.btn_sleep.setToolTip("Turns the device screen off (saves power, scrcpy will go black).")
+        self.btn_sleep.clicked.connect(self.sleep_screen)
+        self.chk_stay_awake = QCheckBox("Keep Screen Awake (USB)")
+        self.chk_stay_awake.setToolTip("Keeps the screen on while connected to USB power.")
+        self.chk_stay_awake.stateChanged.connect(self.toggle_stay_awake)
+        al.addWidget(self.btn_wake); al.addWidget(self.btn_sleep); al.addWidget(self.chk_stay_awake)
+        gb_actions.setLayout(al); l.addWidget(gb_actions)
         
         # Snapshots
         gb_snap = QGroupBox("Snapshot / Offline"); sl = QVBoxLayout()
@@ -470,9 +503,40 @@ class MainWindow(QMainWindow):
             repo_path / "app" / "scrcpy.exe",
             repo_path / "app" / "build" / "scrcpy.exe",
             repo_path / "app" / "dist" / "scrcpy.exe",
+            repo_path / "x" / "app" / "scrcpy.exe",
         ]
         for cand in candidates:
             if cand.exists():
+                return str(cand)
+        return ""
+
+    def find_scrcpy_server(self, scrcpy_bin: str) -> str:
+        bin_path = Path(scrcpy_bin)
+        candidates = []
+
+        # Same folder as scrcpy.exe (release zip layout)
+        candidates.append(bin_path.parent / "scrcpy-server")
+        candidates.append(bin_path.parent / "scrcpy-server.jar")
+
+        # Repo root (custom build layout) only if scrcpy lives under repo
+        repo_path = Path(self.scrcpy_repo_path)
+        if repo_path in bin_path.parents:
+            candidates.append(repo_path / "scrcpy-server")
+            candidates.append(repo_path / "scrcpy-server.jar")
+            candidates.extend(sorted(repo_path.glob("scrcpy-server-v*")))
+
+            # Two levels up from x/app/scrcpy.exe
+            if bin_path.parts and "x" in bin_path.parts:
+                try:
+                    root = bin_path.parents[2]
+                    candidates.append(root / "scrcpy-server")
+                    candidates.append(root / "scrcpy-server.jar")
+                    candidates.extend(sorted(root.glob("scrcpy-server-v*")))
+                except Exception:
+                    pass
+
+        for cand in candidates:
+            if cand and cand.exists() and cand.is_file():
                 return str(cand)
         return ""
 
@@ -490,8 +554,28 @@ class MainWindow(QMainWindow):
         repo_path = Path(self.scrcpy_repo_path)
         git_dir = repo_path / ".git"
         if not repo_path.exists() or not git_dir.exists():
-            self.log_sys("Scrcpy auto-update skipped (no git repo found)")
-            return
+            scrcpy_root = Path(__file__).resolve().parents[2] / "scrcpy-3.3.4"
+            git_repo = scrcpy_root / "scrcpy-git"
+            if not git_repo.exists() or not (git_repo / ".git").exists():
+                try:
+                    git_repo.parent.mkdir(parents=True, exist_ok=True)
+                    res = subprocess.run(
+                        ["git", "clone", "--depth", "1", "https://github.com/Genymobile/scrcpy.git", str(git_repo)],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if res.returncode != 0:
+                        msg = res.stderr.strip() or res.stdout.strip() or "unknown error"
+                        self.log_sys(f"Scrcpy auto-update failed (clone): {msg}")
+                        return
+                    self.log_sys("Scrcpy auto-update: cloned upstream repo")
+                except Exception as ex:
+                    self.log_sys(f"Scrcpy auto-update error: {ex}")
+                    return
+            self.scrcpy_repo_path = str(git_repo)
+            repo_path = git_repo
+            git_dir = repo_path / ".git"
         try:
             res = subprocess.run(
                 ["git", "-C", str(repo_path), "pull", "--ff-only"],
@@ -500,12 +584,141 @@ class MainWindow(QMainWindow):
                 check=False,
             )
             if res.returncode == 0:
-                self.log_sys("Scrcpy auto-update: up to date")
+                msg = res.stdout.strip() or "Scrcpy auto-update: up to date"
+                self.log_sys(msg)
+                self._build_scrcpy_async(repo_path)
             else:
                 msg = res.stderr.strip() or res.stdout.strip() or "unknown error"
                 self.log_sys(f"Scrcpy auto-update failed: {msg}")
         except Exception as ex:
             self.log_sys(f"Scrcpy auto-update error: {ex}")
+
+    def _build_scrcpy_async(self, repo_path: Path) -> None:
+        if not repo_path.exists():
+            self.log_sys("Scrcpy build skipped (repo not found)")
+            return
+
+        def _worker() -> None:
+            try:
+                self._build_scrcpy(repo_path)
+            except Exception as ex:
+                self.log_sys(f"Scrcpy build failed: {ex}")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _build_scrcpy(self, repo_path: Path) -> None:
+        bash = Path("C:/msys64/usr/bin/bash.exe")
+        if not bash.exists():
+            self.log_sys("Scrcpy build skipped (MSYS2 not installed)")
+            return
+
+        version = self._detect_scrcpy_version(repo_path)
+        if not version:
+            self.log_sys("Scrcpy build skipped (version not detected)")
+            return
+
+        server_path = repo_path / f"scrcpy-server-v{version}"
+        if not server_path.exists():
+            if not self._download_scrcpy_server(version, server_path):
+                self.log_sys("Scrcpy build skipped (server download failed)")
+                return
+
+        build_dir = repo_path / "x"
+        build_cmd = "meson setup x"
+        if build_dir.exists():
+            build_cmd = "meson setup x --reconfigure"
+
+        cmd = (
+            f"export PATH=/usr/bin:/mingw64/bin:$PATH; "
+            f"cd {self._msys_path(repo_path)} && "
+            f"{build_cmd} --buildtype=release --strip -Db_lto=true "
+            f"-Dprebuilt_server=./scrcpy-server-v{version} && ninja -Cx"
+        )
+        self.log_sys(f"Scrcpy build started (v{version})")
+        res = subprocess.run([str(bash), "-lc", cmd], capture_output=True, text=True, check=False)
+        if res.returncode == 0:
+            self.log_sys("Scrcpy build complete")
+            self._copy_scrcpy_runtime_dlls(repo_path)
+        else:
+            msg = res.stderr.strip() or res.stdout.strip() or "unknown error"
+            self.log_sys(f"Scrcpy build failed: {msg}")
+
+    def _detect_scrcpy_version(self, repo_path: Path) -> str:
+        meson_file = repo_path / "meson.build"
+        if not meson_file.exists():
+            return ""
+        try:
+            text = meson_file.read_text(encoding="utf-8", errors="replace")
+            match = re.search(r"version\s*:\s*'([^']+)'", text)
+            return match.group(1).strip() if match else ""
+        except Exception:
+            return ""
+
+    def _download_scrcpy_server(self, version: str, out_path: Path) -> bool:
+        try:
+            url = f"https://github.com/Genymobile/scrcpy/releases/download/v{version}/scrcpy-server-v{version}"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(url, out_path)
+            return out_path.exists()
+        except Exception as ex:
+            self.log_sys(f"Scrcpy server download error: {ex}")
+            return False
+
+    def _msys_path(self, path: Path) -> str:
+        drive = path.drive.rstrip(":").lower()
+        tail = str(path).replace("\\", "/").split(":", 1)[-1]
+        return f"/{drive}{tail}"
+
+    def _copy_scrcpy_runtime_dlls(self, repo_path: Path) -> None:
+        scrcpy_bin = repo_path / "x" / "app" / "scrcpy.exe"
+        if not scrcpy_bin.exists():
+            return
+        dll_src = Path("C:/msys64/mingw64/bin")
+        if not dll_src.exists():
+            self.log_sys("Scrcpy DLL copy skipped (MSYS2 runtime not found)")
+            return
+        dlls = set()
+        bash = Path("C:/msys64/usr/bin/bash.exe")
+        if bash.exists():
+            try:
+                cmd = f"export PATH=/usr/bin:/mingw64/bin:$PATH; ldd '{self._msys_path(scrcpy_bin)}'"
+                res = subprocess.run([str(bash), "-lc", cmd], capture_output=True, text=True, check=False)
+                for line in (res.stdout or "").splitlines():
+                    if "/mingw64/bin/" in line and "=>" in line:
+                        try:
+                            dll_path = line.split("=>", 1)[1].split("(", 1)[0].strip()
+                            name = Path(dll_path).name
+                            if name.lower().endswith(".dll"):
+                                dlls.add(name)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        # Fallback + common runtime libs
+        dlls.update([
+            "avcodec-62.dll",
+            "avformat-62.dll",
+            "avutil-60.dll",
+            "SDL2.dll",
+            "swresample-6.dll",
+            "libusb-1.0.dll",
+            "libstdc++-6.dll",
+            "libgcc_s_seh-1.dll",
+            "libwinpthread-1.dll",
+        ])
+
+        copied = 0
+        for name in sorted(dlls):
+            src = dll_src / name
+            if src.exists():
+                try:
+                    shutil.copy2(src, scrcpy_bin.parent / name)
+                    copied += 1
+                except Exception:
+                    pass
+        if copied:
+            self.log_sys(f"Scrcpy runtime DLLs copied: {copied}")
 
     def on_scrcpy_window_toggle(self) -> None:
         if self.video_thread and isinstance(self.video_thread, ScrcpyVideoSource):
@@ -554,19 +767,34 @@ class MainWindow(QMainWindow):
     def refresh_devices(self):
         self.combo_dev.blockSignals(True); self.combo_dev.clear()
         devs = AdbManager.get_devices_detailed()
+        self.device_states = {}
         for d in devs:
-            self.combo_dev.addItem(f"{d['model']} ({d['serial']})", d['serial'])
+            state = d.get("state") or "unknown"
+            label = f"{d['model']} ({d['serial']})"
+            if state and state != "device":
+                label += f" [{state}]"
+            self.combo_dev.addItem(label, d['serial'])
+            self.device_states[d['serial']] = state
             AdbManager.record_device(d['serial'], d['model'])
         self.combo_dev.blockSignals(False)
-        if devs: self.on_dev_change(0)
+        if devs:
+            online_idx = next((i for i, d in enumerate(devs) if d.get("state") == "device"), None)
+            if online_idx is not None:
+                self.on_dev_change(online_idx)
         self.update_history_combo()
         self.log_sys(f"Devices refreshed: {len(devs)} found")
 
     def on_dev_change(self, idx):
         self.active_device = self.combo_dev.itemData(idx)
         if self.active_device:
+            self._root_prompted = False
+            state = getattr(self, "device_states", {}).get(self.active_device, "device")
+            if state != "device":
+                self.log_sys(f"Selected device state is '{state}'. Reconnect or authorize the device.")
+                return
             self.log_sys(f"Active device set: {self.active_device}")
             self.log_device_info()
+            self.update_display_combo()
 
     def toggle_live(self):
         if self.video_thread:
@@ -598,6 +826,7 @@ class MainWindow(QMainWindow):
                 if self.chk_scrcpy_auto.isChecked():
                     self.update_scrcpy_repo()
                 scrcpy_fps = 20 if self.perf_mode else 30
+                scrcpy_server = self.find_scrcpy_server(self.scrcpy_path)
                 self.video_thread = ScrcpyVideoSource(
                     self.active_device,
                     max_size=self.stream_max_size,
@@ -606,9 +835,13 @@ class MainWindow(QMainWindow):
                     scrcpy_path=self.scrcpy_path or None,
                     hide_window=(not self.chk_scrcpy_hide.isChecked()) if hasattr(self, "chk_scrcpy_hide") else True,
                     prefer_raw=self.chk_scrcpy_raw.isChecked() if hasattr(self, "chk_scrcpy_raw") else True,
+                    display_id=self.selected_display_id,
+                    server_path=scrcpy_server or None,
                 )
                 self.video_thread.log_line.connect(self.log_sys)
                 self.log_sys(f"Live source: Scrcpy (fast) | bin: {self.scrcpy_path}")
+                if scrcpy_server:
+                    self.log_sys(f"Scrcpy server: {scrcpy_server}")
                 self.log_sys(
                     "Scrcpy settings: "
                     f"max_size={self.stream_max_size or 'native'} "
@@ -625,6 +858,7 @@ class MainWindow(QMainWindow):
             
             self.xml_thread = HierarchyThread(self.active_device)
             self.xml_thread.tree_ready.connect(self.on_tree_data)
+            self.xml_thread.dump_error.connect(self.on_dump_error)
             self.xml_thread.start()
             
             self.log_thread = LogcatThread(self.active_device)
@@ -691,6 +925,12 @@ class MainWindow(QMainWindow):
             return
         meta = AdbManager.get_device_meta(self.active_device)
         self.log_sys(f"Device model: {meta.get('model', 'Unknown')} | serial: {meta.get('serialno', 'n/a')}")
+        size = AdbManager.get_screen_size(self.active_device)
+        if size:
+            self.device_bounds = (0, 0, size[0], size[1])
+            self.log_sys(f"Display size: {size[0]}x{size[1]}")
+        if not AdbManager.has_uiautomator_service(self.active_device):
+            self.log_sys("⚠️ UIAutomator service not available on this device build. Live UI tree is unavailable.")
         ro_secure = meta.get("ro_secure", "unknown")
         if ro_secure in ("0", "1"):
             self.log_sys(f"Device security: ro.secure={ro_secure} ({'debug' if ro_secure == '0' else 'production'})")
@@ -704,6 +944,85 @@ class MainWindow(QMainWindow):
         display_info = meta.get("display_info", [])
         if display_info:
             self.log_sys(f"Display info count: {len(display_info)}")
+        preferred = meta.get("preferred_display_id")
+        if preferred:
+            self.log_sys(f"Preferred display: {preferred}")
+
+    def update_display_combo(self) -> None:
+        if not hasattr(self, "combo_display"):
+            return
+        self.combo_display.blockSignals(True)
+        self.combo_display.clear()
+        self.combo_display.addItem("Auto (best)", None)
+        if not self.active_device:
+            self.combo_display.blockSignals(False)
+            return
+
+        details = AdbManager.get_display_details(self.active_device)
+        display_ids = AdbManager.get_display_ids(self.active_device)
+        if details:
+            for item in details:
+                disp_id = item.get("id")
+                label = f"Display {disp_id}"
+                extra = item.get("label") or ""
+                size_match = re.search(r"(\d+) x (\d+)", extra)
+                if size_match:
+                    label += f" ({size_match.group(1)}x{size_match.group(2)})"
+                elif extra:
+                    label += f" - {extra}"
+                self.combo_display.addItem(label, disp_id)
+        else:
+            for disp_id in display_ids:
+                self.combo_display.addItem(f"Display {disp_id}", disp_id)
+
+        if len(display_ids) > 1:
+            self.log_sys(f"Multiple displays detected: {', '.join(display_ids)}. Use Display selector to switch.")
+
+        self.combo_display.blockSignals(False)
+
+    def on_display_change(self, idx: int) -> None:
+        if not self.active_device:
+            return
+        display_id = self.combo_display.itemData(idx)
+        self.selected_display_id = display_id
+        AdbManager.set_preferred_display_id(self.active_device, display_id)
+        if display_id:
+            self.log_sys(f"Display set to {display_id} for live capture and dumps")
+        else:
+            self.log_sys("Display set to Auto (best match)")
+        if self.video_thread and isinstance(self.video_thread, ScrcpyVideoSource):
+            self.log_sys("Display change: restarting live mirror to apply display selection")
+            self.toggle_live()
+            self.toggle_live()
+
+    def wake_screen(self) -> None:
+        if not self.active_device:
+            self.log_sys("Wake screen: no active device selected")
+            return
+        AdbManager.shell(self.active_device, ["input", "keyevent", "224"], timeout=3)
+        AdbManager.shell(self.active_device, ["input", "keyevent", "82"], timeout=3)
+        self.log_sys("Wake screen: sent WAKEUP + MENU (attempt unlock). If scrcpy was black, it should recover.")
+        if self.video_thread and isinstance(self.video_thread, ScrcpyVideoSource):
+            self.log_sys("Wake screen: restarting live mirror to refresh scrcpy capture")
+            self.toggle_live()
+            self.toggle_live()
+
+    def sleep_screen(self) -> None:
+        if not self.active_device:
+            self.log_sys("Sleep screen: no active device selected")
+            return
+        AdbManager.shell(self.active_device, ["input", "keyevent", "223"], timeout=3)
+        self.log_sys("Sleep screen: sent SLEEP. Scrcpy will go black until the screen is on.")
+
+    def toggle_stay_awake(self) -> None:
+        if not self.active_device:
+            self.log_sys("Keep awake: no active device selected")
+            return
+        enabled = self.chk_stay_awake.isChecked()
+        val = "true" if enabled else "false"
+        AdbManager.shell(self.active_device, ["svc", "power", "stayon", val], timeout=3)
+        state = "enabled" if enabled else "disabled"
+        self.log_sys(f"Keep awake: {state} (screen stays on while USB power is connected).")
         self.log_secure_layers()
 
     def log_secure_layers(self) -> None:
@@ -746,8 +1065,16 @@ class MainWindow(QMainWindow):
             self.log_sys(f"UI tree updated: {node_count} nodes")
             if parse_err:
                 self.log_sys("UI dump loaded but has zero valid bounds. The dump may be incomplete.")
+                self.set_tree_status("Partial", "#d9a441")
+            elif not self.rect_map:
+                self.set_tree_status("Partial", "#d9a441")
+            else:
+                self.set_tree_status("OK", "#69d08f")
         else:
             self.log_sys("UI dump parsed with no nodes. The dump may be invalid.")
+            self.set_tree_placeholder("UI dump unavailable", "No valid nodes found in the dump.")
+            self.rect_item.hide()
+            self.set_tree_status("Unavailable", "#e06b6b")
 
         if root and not self.rect_map:
             self.log_sys("Snapshot flagged: zero valid element bounds detected.")
@@ -764,6 +1091,18 @@ class MainWindow(QMainWindow):
         
         if node.valid_bounds: self.rect_map.append((node.rect, node))
         for c in node.children: self.populate_tree(c, item)
+
+    def set_tree_placeholder(self, title: str, detail: str = "") -> None:
+        self.tree.clear()
+        self.current_node_map = {}
+        self.node_to_item_map = {}
+        self.rect_map = []
+        root_item = QTreeWidgetItem(self.tree)
+        root_item.setText(0, title)
+        if detail:
+            detail_item = QTreeWidgetItem(root_item)
+            detail_item.setText(0, detail)
+        self.tree.expandAll()
 
     def count_nodes(self, node) -> int:
         if not node:
@@ -1171,6 +1510,11 @@ class MainWindow(QMainWindow):
             fw, fh = self.last_frame_size
             if ow > 0 and oh > 0 and fw > 0 and fh > 0:
                 return (fw / ow, fh / oh, ox, oy)
+        if self.device_bounds and self.last_frame_size:
+            ox, oy, ow, oh = self.device_bounds
+            fw, fh = self.last_frame_size
+            if ow > 0 and oh > 0 and fw > 0 and fh > 0:
+                return (fw / ow, fh / oh, ox, oy)
         return (1.0, 1.0, 0.0, 0.0)
 
     def scale_rect(self, rect, sx: float, sy: float, ox: float, oy: float):
@@ -1213,6 +1557,48 @@ class MainWindow(QMainWindow):
     def on_focus_changed(self, focus: str) -> None:
         self.lbl_focus.setText(f"Focus: {focus}")
         self.request_tree_refresh("Focus changed", log=True)
+
+    def set_tree_status(self, status: str, color: str = "#9aa7bd") -> None:
+        if hasattr(self, "lbl_tree_status") and self.lbl_tree_status:
+            self.lbl_tree_status.setText(f"Tree: {status}")
+            self.lbl_tree_status.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+    def on_dump_error(self, msg: str) -> None:
+        self.log_sys(msg)
+        lower_msg = msg.lower()
+        if "existing /sdcard/window_dump.xml" in lower_msg:
+            self.set_tree_status("Stale", "#d9a441")
+        else:
+            self.set_tree_status("Unavailable", "#e06b6b")
+        if "service not available" in msg.lower():
+            self.log_sys("This device build does not expose UIAutomator. Ask OEM/firmware team to enable it or use offline dumps.")
+        if "killed" in msg.lower():
+            self.log_sys("UI dump is being killed by the device. Live tree and hover will be unavailable until a dump succeeds.")
+            self.log_sys("Try: keep the device unlocked, close heavy apps, or switch Display to Auto. You can still capture offline snapshots.")
+        if self.active_device and not self._root_prompted:
+            should_prompt = (
+                "killed" in lower_msg
+                or "uiautomator dump failed" in lower_msg
+                or "service not available" in lower_msg
+            )
+            if should_prompt and not AdbManager.is_adb_root(self.active_device):
+                self._root_prompted = True
+                resp = QMessageBox.question(
+                    self,
+                    "ADB root required",
+                    "UI dump failed. This device may require adb root to access UIAutomator.\n\n"
+                    "Run 'adb root' now? (adbd will restart)",
+                )
+                if resp == QMessageBox.Yes:
+                    ok, out = AdbManager.adb_root(self.active_device)
+                    self.log_sys(out or "adb root attempted")
+                    if ok:
+                        self.log_sys("adb root succeeded; refreshing UI tree...")
+                        self.request_tree_refresh("adb root", log=True)
+                else:
+                    self.log_sys("adb root skipped by user")
+        if not self.root_node:
+            self.set_tree_placeholder("UI dump unavailable", msg)
 
     def request_tree_refresh(self, reason: str = "", log: bool = False) -> None:
         if self.xml_thread and hasattr(self.xml_thread, "request_refresh"):
