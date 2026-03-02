@@ -526,6 +526,7 @@ class HierarchyThread(QThread):
         self.last_hash = ""
         self._refresh_event = threading.Event()
         self._last_error_ts = 0.0
+        self.poll_interval_s = 1.5
 
     def run(self) -> None:
         while self.running:
@@ -549,8 +550,9 @@ class HierarchyThread(QThread):
             except Exception:
                 pass
             
-            # Poll hierarchy less frequently than video (1.5s is usually good for UI stability)
-            for _ in range(15): 
+            # Poll hierarchy less frequently than video.
+            loop_count = max(1, int(self.poll_interval_s / 0.1))
+            for _ in range(loop_count):
                 if not self.running: 
                     break
                 if self._refresh_event.wait(timeout=0.1):
@@ -564,6 +566,9 @@ class HierarchyThread(QThread):
     def request_refresh(self) -> None:
         self._refresh_event.set()
 
+    def set_poll_interval(self, seconds: float) -> None:
+        self.poll_interval_s = max(0.2, float(seconds))
+
 class LogcatThread(QThread):
     """ 
     Real-time Log Stream.
@@ -576,6 +581,8 @@ class LogcatThread(QThread):
         self.serial = serial
         self.running = True
         self.proc: Optional[subprocess.Popen] = None
+        self.emit_every_n = 1
+        self._emit_counter = 0
 
     def run(self) -> None:
         # Clear buffer first
@@ -599,7 +606,9 @@ class LogcatThread(QThread):
                 if not line:
                     break
                 if line.strip():
-                    self.log_line.emit(line.strip())
+                    self._emit_counter += 1
+                    if self._emit_counter % max(1, self.emit_every_n) == 0:
+                        self.log_line.emit(line.strip())
         
         if self.proc: 
             self.proc.terminate()
@@ -612,6 +621,9 @@ class LogcatThread(QThread):
             self.terminate()
             self.wait(800)
 
+    def set_emit_every_n(self, n: int) -> None:
+        self.emit_every_n = max(1, int(n))
+
 class FocusMonitorThread(QThread):
     """ 
     Checks Window Focus periodically.
@@ -623,6 +635,7 @@ class FocusMonitorThread(QThread):
         super().__init__()
         self.serial = serial
         self.running = True
+        self.poll_interval_s = 1.0
     
     def run(self) -> None:
         last_focus = ""
@@ -631,10 +644,13 @@ class FocusMonitorThread(QThread):
             if f != last_focus:
                 last_focus = f
                 self.focus_changed.emit(f)
-            time.sleep(1.0) # Check every second
+            time.sleep(max(0.2, self.poll_interval_s))
             
     def stop(self) -> None:
         self.running = False
         if not self.wait(1200):
             self.terminate()
             self.wait(800)
+
+    def set_poll_interval(self, seconds: float) -> None:
+        self.poll_interval_s = max(0.2, float(seconds))
