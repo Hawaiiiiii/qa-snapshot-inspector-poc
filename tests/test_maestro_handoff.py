@@ -46,9 +46,53 @@ def test_export_session_handoff_from_recorded_session(tmp_path: Path):
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema"] == "quantum_handoff.v1"
-    assert manifest["session_id"] == recorder.session_dir.name
-    assert manifest["maestro_export_dir"] == str(export_dir)
-    assert manifest["locator_suggestions"][0]["type"] == "Direct ID"
+    assert manifest["schema_version"] == 1
+
+    session = manifest["session"]
+    assert session["id"] == recorder.session_dir.name
+    assert session["maestro_export_dir"] == str(export_dir)
+    assert session["source_session_dir"] == str(recorder.session_dir)
+    assert session["status"] == "stopped"
+    assert isinstance(session["start_ts"], float)
+    assert isinstance(session["end_ts"], float)
+
+    device = manifest["device"]
+    assert device["serial"] == "emulator-5554"
+    assert device["model"] == "Pixel_Emulator"
+    assert device["environment_type"] == "emulator"
+    assert device["profile"] == "android_studio_emulator"
+
+    locator_bundle = manifest["locator_bundle"]
+    assert locator_bundle["count"] == 1
+    assert locator_bundle["suggestions"][0]["type"] == "Direct ID"
+
+    artifacts = manifest["artifacts"]
+    assert artifacts["latest_frame"]
+    assert artifacts["latest_xml_dump"]
+    assert artifacts["latest_log"] == "logcat_live.txt"
+    assert artifacts["bookmarks"]
+    assert artifacts["core_files"]
+
+    # Ensure all manifest-relative paths resolve to exported files.
+    manifest_paths = []
+    manifest_paths.extend(artifacts["core_files"])
+    manifest_paths.extend(artifacts["frame_files"])
+    manifest_paths.extend(artifacts["xml_dumps"])
+    manifest_paths.extend(artifacts["xml_compressed"])
+    manifest_paths.extend(artifacts["crash_files"])
+    if artifacts["latest_frame"]:
+        manifest_paths.append(artifacts["latest_frame"])
+    if artifacts["latest_xml_dump"]:
+        manifest_paths.append(artifacts["latest_xml_dump"])
+    if artifacts["latest_log"]:
+        manifest_paths.append(artifacts["latest_log"])
+    for bookmark in artifacts["bookmarks"]:
+        for key in ("screenshot", "dump", "logcat", "meta"):
+            if key in bookmark:
+                manifest_paths.append(bookmark[key])
+
+    for rel in manifest_paths:
+        assert (export_dir / rel).exists(), f"Expected artifact missing from export: {rel}"
 
 
 def test_export_session_handoff_skips_missing_optional_files(tmp_path: Path):
@@ -66,3 +110,9 @@ def test_export_session_handoff_skips_missing_optional_files(tmp_path: Path):
     assert (export_dir / "meta.json").exists()
     assert (export_dir / "session.db").exists()
     assert not (export_dir / "bookmarks").exists()
+
+    manifest = json.loads((export_dir / "quantum_handoff.json").read_text(encoding="utf-8"))
+    assert manifest["schema"] == "quantum_handoff.v1"
+    assert manifest["device"]["serial"] == "ABC"
+    assert manifest["artifacts"]["latest_log"] == ""
+    assert manifest["artifacts"]["bookmarks"] == []
