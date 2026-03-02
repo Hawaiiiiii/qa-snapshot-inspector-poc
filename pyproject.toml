@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qa-snapshot-inspector"
-version = "1.0.0"
+version = "2.0.0"
 description = "A professional-grade Python desktop GUI to inspect Android UI snapshots."
 readme = "README.md"
 authors = [
