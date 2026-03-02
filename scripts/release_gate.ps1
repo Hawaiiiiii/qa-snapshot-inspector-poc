@@ -1,6 +1,7 @@
 ﻿param(
     [switch]$BuildExe = $false,
-    [switch]$Strict = $false
+    [switch]$Strict = $false,
+    [switch]$RequirePython311 = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +15,14 @@ if (-not (Test-Path $python)) {
 
 Write-Host "[gate] Python: $python"
 & $python --version
+
+$pyShort = (& $python -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+if ($RequirePython311 -and ($pyShort -ne "3.11")) {
+    throw "Python 3.11.x is required for this gate; found $pyShort"
+}
+if ($pyShort -ne "3.11") {
+    Write-Warning "Final 2.0 packaging baseline is Python 3.11.x (current: $pyShort)."
+}
 
 Write-Host "[gate] pytest"
 & $python -m pytest -q
