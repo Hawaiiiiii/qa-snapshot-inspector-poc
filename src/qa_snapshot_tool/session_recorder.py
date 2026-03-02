@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QImage
 
+from qa_snapshot_native import compress_payload, frame_sha1
 
 @dataclass
 class SessionContext:
@@ -195,7 +196,7 @@ class SessionRecorder:
 
         now = time.time()
         png = self._to_png_bytes(image)
-        digest = hashlib.sha1(png).hexdigest()
+        digest = frame_sha1(png)
 
         # Adaptive timeline: periodic samples are throttled and deduplicated.
         if reason == "periodic":
@@ -235,6 +236,12 @@ class SessionRecorder:
         rel = Path("xml") / f"{int(now * 1000)}_{reason}.uix"
         out = self.session_dir / rel
         out.write_text(xml, encoding="utf-8", errors="replace")
+        if out.stat().st_size > 512 * 1024:
+            try:
+                compressed = compress_payload(xml.encode("utf-8", errors="replace"))
+                (out.with_suffix(".uix.z")).write_bytes(compressed)
+            except Exception:
+                pass
 
         with self._lock:
             self._db.execute(

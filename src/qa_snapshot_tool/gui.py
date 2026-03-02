@@ -18,6 +18,7 @@ import shutil
 import threading
 import urllib.request
 import subprocess
+import sqlite3
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List, Any
@@ -43,6 +44,8 @@ from qa_snapshot_tool.settings import AppSettings
 from qa_snapshot_tool.device_profiles import detect_capabilities
 from qa_snapshot_tool.session_recorder import SessionRecorder
 from qa_snapshot_tool.maestro_handoff import export_session_handoff
+from qa_snapshot_tool.perf_metrics import PerfTracker
+from qa_snapshot_native import backend_name as native_backend_name, smallest_hit, sort_rects_by_area
 
 
 @dataclass
@@ -186,6 +189,11 @@ class MainWindow(QMainWindow):
         self.workspaces: Dict[str, DeviceWorkspace] = {}
         self.workspace_serials: List[str] = []
         self.active_workspace_serial: Optional[str] = None
+        self.perf = PerfTracker()
+        self.last_hover_ts = 0.0
+        self.rect_map_sorted = []
+        self.timeline_event_file_paths: Dict[int, str] = {}
+        self.timeline_event_payloads: Dict[int, str] = {}
 
         self.current_node_map = {}
         self.node_to_item_map = {}
@@ -242,6 +250,8 @@ class MainWindow(QMainWindow):
         
         self.setup_ui()
         self.refresh_devices()
+        self.refresh_timeline_sessions()
+        self.log_sys(f"Hotspot backend active: {native_backend_name()}")
 
         self.fps_timer = QTimer()
         self.fps_timer.timeout.connect(self.update_fps)
@@ -288,13 +298,15 @@ class MainWindow(QMainWindow):
         self.lbl_coords = QLabel("X: 0, Y: 0"); self.lbl_coords.setStyleSheet("color: #c1c7d2; font-family: monospace;")
         self.lbl_focus = QLabel("Focus: -"); self.lbl_focus.setStyleSheet("color: #7db6ff; font-weight: 600;")
         self.lbl_tree_status = QLabel("Tree: Unknown"); self.lbl_tree_status.setStyleSheet("color: #9aa7bd; font-weight: 600;")
+        self.lbl_perf = QLabel("Perf: -"); self.lbl_perf.setStyleSheet("color: #9aa7bd; font-weight: 600;")
+        self.lbl_native = QLabel(f"Hotspot: {native_backend_name()}"); self.lbl_native.setStyleSheet("color: #9aa7bd; font-weight: 600;")
         
         act_fit = QAction("Fit Screen", self); act_fit.triggered.connect(self.enable_fit)
         act_11 = QAction("1:1 Pixel", self); act_11.triggered.connect(self.disable_fit)
         act_center = QAction("Center Window", self); act_center.triggered.connect(self.center_window)
         
         tb.addWidget(self.lbl_fps); tb.addWidget(self.lbl_coords); tb.addSeparator(); tb.addWidget(self.lbl_focus)
-        tb.addSeparator(); tb.addWidget(self.lbl_tree_status)
+        tb.addSeparator(); tb.addWidget(self.lbl_tree_status); tb.addSeparator(); tb.addWidget(self.lbl_perf); tb.addWidget(self.lbl_native)
         tb.addSeparator(); tb.addAction(act_fit); tb.addAction(act_11); tb.addAction(act_center)
 
         self.panels_menu = QMenu("Panels", self)
@@ -569,7 +581,7 @@ class MainWindow(QMainWindow):
         d = QDockWidget("Inspector", self); tabs = QTabWidget()
         self.dock_inspector = d
         self.register_ambient_widget(d)
-        
+
         # Properties Tab (The one missing data in your screenshot)
         self.tbl_props = QTableWidget(); self.tbl_props.setColumnCount(2)
         self.tbl_props.setHorizontalHeaderLabels(["Property", "Value"])
@@ -595,8 +607,47 @@ class MainWindow(QMainWindow):
         self.txt_log.setToolTip("Live device log output. Offline snapshots load logcat.txt here.")
         tabs.addTab(self.txt_log, "Logcat")
 
-        
-        
+        # Timeline / Evidence Tab
+        w_timeline = QWidget(); l_timeline = QVBoxLayout(w_timeline)
+        timeline_top = QHBoxLayout()
+        self.combo_timeline_session = QComboBox()
+        self.combo_timeline_session.setToolTip("Recorded live sessions from the local session store.")
+        self.btn_timeline_refresh = QPushButton("Refresh")
+        self.btn_timeline_refresh.clicked.connect(self.refresh_timeline_sessions)
+        self.btn_timeline_load = QPushButton("Load")
+        self.btn_timeline_load.clicked.connect(self.load_selected_timeline_session)
+        self.btn_timeline_open = QPushButton("Open Folder")
+        self.btn_timeline_open.clicked.connect(self.open_selected_timeline_session)
+        timeline_top.addWidget(self.combo_timeline_session)
+        timeline_top.addWidget(self.btn_timeline_refresh)
+        timeline_top.addWidget(self.btn_timeline_load)
+        timeline_top.addWidget(self.btn_timeline_open)
+
+        self.tbl_timeline = QTableWidget()
+        self.tbl_timeline.setColumnCount(4)
+        self.tbl_timeline.setHorizontalHeaderLabels(["Time", "Type", "File", "Payload"])
+        self.tbl_timeline.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_timeline.verticalHeader().setVisible(False)
+        self.tbl_timeline.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_timeline.itemSelectionChanged.connect(self.on_timeline_selection_changed)
+
+        timeline_actions = QHBoxLayout()
+        self.btn_timeline_open_file = QPushButton("Open Event File")
+        self.btn_timeline_open_file.clicked.connect(self.open_selected_timeline_file)
+        self.btn_timeline_export = QPushButton("Export Session To Maestro")
+        self.btn_timeline_export.clicked.connect(self.export_selected_timeline_to_maestro)
+        timeline_actions.addWidget(self.btn_timeline_open_file)
+        timeline_actions.addWidget(self.btn_timeline_export)
+
+        self.txt_timeline_detail = QTextEdit(); self.txt_timeline_detail.setReadOnly(True)
+        self.txt_timeline_detail.setToolTip("Selected timeline event details.")
+
+        l_timeline.addLayout(timeline_top)
+        l_timeline.addWidget(self.tbl_timeline)
+        l_timeline.addLayout(timeline_actions)
+        l_timeline.addWidget(self.txt_timeline_detail)
+        tabs.addTab(w_timeline, "Timeline")
+
         d.setWidget(self.wrap_ambient_panel(tabs)); self.addDockWidget(Qt.BottomDockWidgetArea, d)
 
     def setup_syslog_dock(self):
@@ -1246,6 +1297,7 @@ class MainWindow(QMainWindow):
             ws.recorder.record_event("live_stopped", {"serial": ws.serial})
             ws.recorder.finish_session("stopped")
             ws.recorder = None
+            self.refresh_timeline_sessions()
         if ws.serial == self.active_workspace_serial:
             self.view.control_enabled = False
 
@@ -1255,14 +1307,20 @@ class MainWindow(QMainWindow):
         ws = self.workspaces.get(serial)
         if not ws:
             return
+        t0 = time.perf_counter()
         img = data if isinstance(data, QImage) else QImage.fromData(data)
+        self.perf.record("frame_decode", (time.perf_counter() - t0) * 1000.0)
         if img.isNull():
             return
-        ws.last_frame_image = img.copy()
-        ws.last_frame_size = (img.width(), img.height())
+        is_active = serial == self.active_workspace_serial
+        if not is_active:
+            ws.last_frame_image = img.copy()
+            ws.last_frame_size = (img.width(), img.height())
         if ws.recorder:
+            tw = time.perf_counter()
             ws.recorder.record_frame(img, reason="periodic")
-        if serial == self.active_workspace_serial:
+            self.perf.record("recorder_write", (time.perf_counter() - tw) * 1000.0)
+        if is_active:
             self.on_frame(img)
             ws.stream_scale = self.stream_scale
             ws.dump_bounds = self.dump_bounds
@@ -1274,7 +1332,9 @@ class MainWindow(QMainWindow):
             return
         ws.last_xml = xml_str
         if ws.recorder and changed:
+            tw = time.perf_counter()
             ws.recorder.record_xml_dump(xml_str, reason="changed")
+            self.perf.record("recorder_write", (time.perf_counter() - tw) * 1000.0)
         if serial == self.active_workspace_serial:
             self.on_tree_data(xml_str, changed)
             ws.dump_bounds = self.dump_bounds
@@ -1309,6 +1369,7 @@ class MainWindow(QMainWindow):
             self.on_dump_error(msg)
 
     def on_frame(self, data):
+        tr = time.perf_counter()
         if isinstance(data, QImage):
             img = data
         else:
@@ -1347,10 +1408,14 @@ class MainWindow(QMainWindow):
             ws.last_frame_size = self.last_frame_size
             ws.stream_scale = self.stream_scale
             ws.dump_bounds = self.dump_bounds
+        self.perf.record("frame_render", (time.perf_counter() - tr) * 1000.0)
 
     def update_fps(self):
         self.lbl_fps.setText(f"FPS: {self.fps_counter}")
+        self.lbl_perf.setText(f"Perf: {self.perf.summary()}")
         self.fps_counter = 0
+        if self.perf.should_emit():
+            self.log_sys(f"Perf {self.perf.summary()}")
 
     def log_device_info(self):
         if not self.active_device:
@@ -1505,7 +1570,9 @@ class MainWindow(QMainWindow):
         if ws:
             ws.last_xml = xml_str
 
+        tp = time.perf_counter()
         root, parse_err = UixParser.parse(xml_str)
+        self.perf.record("xml_parse", (time.perf_counter() - tp) * 1000.0)
         self.root_node = root
         if root and root.valid_bounds:
             self.dump_bounds = root.rect
@@ -1515,6 +1582,7 @@ class MainWindow(QMainWindow):
         self.tree.clear(); self.current_node_map = {}; self.node_to_item_map = {}; self.rect_map = []
         if root:
             self.populate_tree(root, self.tree)
+            self.rect_map_sorted = sort_rects_by_area(self.rect_map)
             node_count = self.count_nodes(root)
             self.log_sys(f"UI tree updated: {node_count} nodes")
             if parse_err:
@@ -1529,6 +1597,7 @@ class MainWindow(QMainWindow):
             self.set_tree_placeholder("UI dump unavailable", "No valid nodes found in the dump.")
             self.rect_item.hide()
             self.set_tree_status("Unavailable", "#e06b6b")
+            self.rect_map_sorted = []
 
         if root and not self.rect_map:
             self.log_sys("Snapshot flagged: zero valid element bounds detected.")
@@ -1553,6 +1622,7 @@ class MainWindow(QMainWindow):
         self.current_node_map = {}
         self.node_to_item_map = {}
         self.rect_map = []
+        self.rect_map_sorted = []
         root_item = QTreeWidgetItem(self.tree)
         root_item.setText(0, title)
         if detail:
@@ -1568,21 +1638,32 @@ class MainWindow(QMainWindow):
             total += self.count_nodes(child)
         return total
 
+    def scene_to_dump_coords(self, x: int, y: int) -> tuple[int, int]:
+        sx, sy, ox, oy = self.get_bounds_transform()
+        if sx <= 0 or sy <= 0:
+            return (x, y)
+        return (int(x / sx + ox), int(y / sy + oy))
+
+    def find_best_node_at_scene(self, x: int, y: int):
+        if not self.rect_map:
+            return None
+        dx, dy = self.scene_to_dump_coords(x, y)
+        rect_source = self.rect_map_sorted if self.rect_map_sorted else self.rect_map
+        return smallest_hit(rect_source, dx, dy)
+
     def on_mouse_hover(self, x, y):
         self.lbl_coords.setText(f"X: {x}, Y: {y}")
-        # Hover detection
-        best_node = None; best_area = float('inf')
-        sx, sy, ox, oy = self.get_bounds_transform()
-        for rect, node in self.rect_map:
-            rx, ry, rw, rh = self.scale_rect(rect, sx, sy, ox, oy)
-            if rx <= x <= rx+rw and ry <= y <= ry+rh:
-                area = rw * rh
-                if area < best_area: best_area = area; best_node = node
-        
+        now = time.monotonic()
+        if (now - self.last_hover_ts) < 0.012:
+            return
+        self.last_hover_ts = now
+        best_node = self.find_best_node_at_scene(x, y)
         if best_node:
             self.view.setCursor(Qt.PointingHandCursor if best_node.clickable else Qt.ArrowCursor)
             if self.auto_follow_hover and not self.locked_node:
                 self.select_node(best_node, scroll=True)
+        else:
+            self.view.setCursor(Qt.ArrowCursor)
 
     def handle_tap(self, x, y):
         # Always log the tap coordinate to help users who need manual test coordinates (System UI workaround)
@@ -1937,6 +2018,149 @@ class MainWindow(QMainWindow):
         except Exception as ex:
             self.log_sys(f"Failed to open Maestro flows folder: {ex}")
 
+    def refresh_timeline_sessions(self) -> None:
+        if not hasattr(self, "combo_timeline_session"):
+            return
+        root = self.settings.session_root_path()
+        sessions = []
+        for path in root.iterdir():
+            if path.is_dir() and (path / "session.db").exists():
+                sessions.append(path)
+        sessions.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        self.combo_timeline_session.blockSignals(True)
+        self.combo_timeline_session.clear()
+        for session_dir in sessions:
+            label = session_dir.name
+            meta_path = session_dir / "meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    label = f"{meta.get('model', 'Unknown')} [{meta.get('serial', 'n/a')}] - {session_dir.name}"
+                except Exception:
+                    pass
+            self.combo_timeline_session.addItem(label, str(session_dir))
+        self.combo_timeline_session.blockSignals(False)
+        if sessions:
+            self.load_selected_timeline_session()
+        else:
+            if hasattr(self, "tbl_timeline"):
+                self.tbl_timeline.setRowCount(0)
+                self.txt_timeline_detail.setText("No sessions found.")
+
+    def _selected_timeline_dir(self) -> Optional[Path]:
+        if not hasattr(self, "combo_timeline_session"):
+            return None
+        raw = self.combo_timeline_session.currentData()
+        if not raw:
+            return None
+        path = Path(str(raw))
+        if not path.exists():
+            return None
+        return path
+
+    def load_selected_timeline_session(self) -> None:
+        session_dir = self._selected_timeline_dir()
+        if not session_dir or not hasattr(self, "tbl_timeline"):
+            return
+        db_path = session_dir / "session.db"
+        if not db_path.exists():
+            self.log_sys(f"Session DB not found: {db_path}")
+            return
+
+        rows = []
+        try:
+            con = sqlite3.connect(str(db_path))
+            cursor = con.execute(
+                "SELECT ts, kind, file_relpath, payload_json FROM events ORDER BY id DESC LIMIT 1500"
+            )
+            rows = cursor.fetchall()
+            con.close()
+        except Exception as ex:
+            self.log_sys(f"Failed loading timeline events: {ex}")
+            return
+
+        self.timeline_event_file_paths = {}
+        self.timeline_event_payloads = {}
+        self.tbl_timeline.setRowCount(0)
+        for idx, (ts, kind, file_relpath, payload_json) in enumerate(rows):
+            self.tbl_timeline.insertRow(idx)
+            ts_text = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts)))
+            self.tbl_timeline.setItem(idx, 0, QTableWidgetItem(ts_text))
+            self.tbl_timeline.setItem(idx, 1, QTableWidgetItem(str(kind)))
+            self.tbl_timeline.setItem(idx, 2, QTableWidgetItem(str(file_relpath or "")))
+            preview = str(payload_json or "")[:180]
+            self.tbl_timeline.setItem(idx, 3, QTableWidgetItem(preview))
+            self.timeline_event_payloads[idx] = str(payload_json or "")
+            if file_relpath:
+                self.timeline_event_file_paths[idx] = str((session_dir / str(file_relpath)).resolve())
+        self.txt_timeline_detail.setText(f"Loaded {len(rows)} events from {session_dir}")
+
+    def on_timeline_selection_changed(self) -> None:
+        if not hasattr(self, "tbl_timeline"):
+            return
+        items = self.tbl_timeline.selectedItems()
+        if not items:
+            return
+        row = items[0].row()
+        payload_text = self.timeline_event_payloads.get(row, "")
+        file_item = self.tbl_timeline.item(row, 2)
+        detail = []
+        if file_item and file_item.text():
+            detail.append(f"File: {file_item.text()}")
+        if payload_text:
+            detail.append(payload_text)
+        self.txt_timeline_detail.setText("\n".join(detail))
+
+    def open_selected_timeline_session(self) -> None:
+        session_dir = self._selected_timeline_dir()
+        if not session_dir:
+            self.log_sys("No timeline session selected.")
+            return
+        try:
+            os.startfile(str(session_dir))  # type: ignore[attr-defined]
+        except Exception as ex:
+            self.log_sys(f"Failed to open session folder: {ex}")
+
+    def open_selected_timeline_file(self) -> None:
+        if not hasattr(self, "tbl_timeline"):
+            return
+        items = self.tbl_timeline.selectedItems()
+        if not items:
+            self.log_sys("Select a timeline row first.")
+            return
+        row = items[0].row()
+        file_path = self.timeline_event_file_paths.get(row)
+        if not file_path:
+            self.log_sys("Selected event has no file attached.")
+            return
+        path = Path(file_path)
+        if not path.exists():
+            self.log_sys(f"Event file does not exist: {file_path}")
+            return
+        try:
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        except Exception as ex:
+            self.log_sys(f"Failed to open event file: {ex}")
+
+    def export_selected_timeline_to_maestro(self) -> None:
+        session_dir = self._selected_timeline_dir()
+        if not session_dir:
+            self.log_sys("No timeline session selected for export.")
+            return
+        workspace_path = self.input_maestro_workspace.text().strip()
+        if not workspace_path:
+            self.log_sys("Set a Maestro workspace path before exporting.")
+            return
+        self.save_maestro_workspace()
+        result = export_session_handoff(
+            session_dir=session_dir,
+            maestro_workspace=Path(workspace_path),
+            locator_suggestions=getattr(self, "current_suggestions", []),
+        )
+        self.last_handoff_manifest = str(result["manifest_path"])
+        self.log_sys(f"Timeline session exported: {result['export_dir']}")
+
     def on_stream_size_change(self) -> None:
         text = self.combo_res.currentText()
         if text == "Native":
@@ -2056,17 +2280,7 @@ class MainWindow(QMainWindow):
             cur = cur.parent()
 
     def find_node_at(self, x: int, y: int):
-        best_node = None
-        best_area = float('inf')
-        sx, sy, ox, oy = self.get_bounds_transform()
-        for rect, node in self.rect_map:
-            rx, ry, rw, rh = self.scale_rect(rect, sx, sy, ox, oy)
-            if rx <= x <= rx + rw and ry <= y <= ry + rh:
-                area = rw * rh
-                if area < best_area:
-                    best_area = area
-                    best_node = node
-        return best_node
+        return self.find_best_node_at_scene(x, y)
 
     def get_bounds_transform(self):
         if self.dump_bounds and self.last_frame_size:
