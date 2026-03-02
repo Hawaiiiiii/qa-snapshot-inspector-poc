@@ -12,7 +12,7 @@ Before you launch the app, make sure you have:
 
 Open your terminal in the project folder and run:
 ```bash
-python src/qa_snapshot_tool/main.py
+.venv\Scripts\python.exe src/qa_snapshot_tool/main.py
 ```
 You will see the dark-themed interface appear.
 

@@ -51,6 +51,22 @@ When you save a snapshot, we create a folder specifically for that moment in tim
 *    `logcat.txt`: (Optional) The system logs from the device at that moment - great for seeing *why* an app crashed.
 *    `meta.json`: Details like "Google Pixel 6, Android 13, captured at 10:43 AM".
 
+## QUANTUM 2.0 runtime model
+
+2.0 extends the one-shot snapshot model into a continuous session timeline:
+
+1. Starting Live opens a recorder session automatically under `%USERPROFILE%\\.qa_snapshot_tool\\sessions\\<session_id>`.
+2. Recorder writes timeline artifacts while live is running:
+   * periodic keyframe frames,
+   * XML dumps when hierarchy hash changes,
+   * incremental log lines,
+   * event markers for input/focus/display/dump transitions,
+   * crash markers if the app crashes.
+3. Session timeline is indexed in `session.db` (SQLite) and browsed directly in the Inspector Timeline tab.
+4. Manual "Capture Snapshot" during Live acts as a bookmark export from the active timeline session.
+5. Maestro handoff export writes a deterministic evidence bundle under:
+   * `<maestro_workspace>/artifacts/runs/quantum/<session_id>/`.
+
 ## Data flow diagram
 
 ```mermaid

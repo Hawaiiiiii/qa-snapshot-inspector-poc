@@ -27,4 +27,5 @@ pip install -r requirements.txt
 
 ### Run the tool
 ```bash
-python src/qa_snapshot_tool/main.py
+.venv\Scripts\python.exe src/qa_snapshot_tool/main.py
+```
