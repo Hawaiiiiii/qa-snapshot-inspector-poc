@@ -23,4 +23,7 @@ captures/
 docs/evidence/perf/local_*/
 docs/evidence/perf/rdp_*/
 docs/evidence/emulator/smoke_*/
+docs/evidence/rack/g70_multidevice_*/
+docs/evidence/rack/forced_crash_check_*.json
+docs/evidence/maestro/maestro_signoff_check_*.json
 
