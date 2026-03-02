@@ -100,10 +100,17 @@ def main() -> None:
     except Exception:
         import traceback
 
+        crash_text = traceback.format_exc()
+        try:
+            from qa_snapshot_tool.session_recorder import SessionRecorderRegistry
+
+            SessionRecorderRegistry.record_global_crash(crash_text)
+        except Exception:
+            pass
         crash_dir = Path.home() / ".qa_snapshot_tool"
         crash_dir.mkdir(parents=True, exist_ok=True)
         crash_path = crash_dir / "last_crash.txt"
-        crash_path.write_text(traceback.format_exc(), encoding="utf-8")
+        crash_path.write_text(crash_text, encoding="utf-8")
         print(f"Fatal error. Crash report saved to {crash_path}")
         try:
             from PySide6.QtWidgets import QMessageBox

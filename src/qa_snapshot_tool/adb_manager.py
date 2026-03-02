@@ -781,6 +781,15 @@ class AdbManager:
             f.write(focus)
 
         meta = AdbManager.get_device_meta(serial)
+        try:
+            from qa_snapshot_tool.device_profiles import detect_capabilities
+
+            caps = detect_capabilities(serial, emulator_beta_enabled=True)
+            meta["environment_type"] = caps.environment_type
+            meta["profile"] = caps.profile
+        except Exception:
+            meta["environment_type"] = "rack"
+            meta["profile"] = "rack_aaos"
         meta["focus"] = focus
         with open(os.path.join(folder, 'meta.json'), 'w', encoding='utf-8') as f:
             json.dump(meta, f, indent=2)

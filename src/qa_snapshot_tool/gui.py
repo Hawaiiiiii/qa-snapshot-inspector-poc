@@ -19,6 +19,8 @@ import threading
 import urllib.request
 import subprocess
 from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Dict, Optional, List, Any
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTreeWidget, QTreeWidgetItem,
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QFileDialog, QTextEdit,
@@ -37,6 +39,34 @@ from qa_snapshot_tool.locator_suggester import LocatorSuggester
 from qa_snapshot_tool.adb_manager import AdbManager
 from qa_snapshot_tool.live_mirror import VideoThread, ScrcpyVideoSource, HierarchyThread, LogcatThread, FocusMonitorThread
 from qa_snapshot_tool.theme import Theme
+from qa_snapshot_tool.settings import AppSettings
+from qa_snapshot_tool.device_profiles import detect_capabilities
+from qa_snapshot_tool.session_recorder import SessionRecorder
+from qa_snapshot_tool.maestro_handoff import export_session_handoff
+
+
+@dataclass
+class DeviceWorkspace:
+    serial: str
+    model: str = "Unknown"
+    selected_display_id: Optional[str] = None
+    video_thread: Optional[Any] = None
+    xml_thread: Optional[HierarchyThread] = None
+    log_thread: Optional[LogcatThread] = None
+    focus_thread: Optional[FocusMonitorThread] = None
+    recorder: Optional[SessionRecorder] = None
+    last_frame_image: Optional[QImage] = None
+    last_frame_size: Optional[tuple[int, int]] = None
+    stream_scale: float = 1.0
+    dump_bounds: Optional[tuple[int, int, int, int]] = None
+    device_bounds: Optional[tuple[int, int, int, int]] = None
+    last_xml: str = ""
+    log_lines: List[str] = field(default_factory=list)
+    focus_text: str = "-"
+    last_snapshot_path: Optional[str] = None
+    last_handoff_manifest: Optional[str] = None
+    environment_type: str = "rack"
+    profile: str = "rack_aaos"
 
 class SmartGraphicsView(QGraphicsView):
     mouse_moved = Signal(int, int)
@@ -151,7 +181,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("QUANTUM Inspector | Paradox Cat Internal")
         self.resize(1600, 1000)
-        
+
+        self.settings = AppSettings.load()
+        self.workspaces: Dict[str, DeviceWorkspace] = {}
+        self.workspace_serials: List[str] = []
+        self.active_workspace_serial: Optional[str] = None
+
         self.current_node_map = {}
         self.node_to_item_map = {}
         self.rect_map = []
@@ -184,6 +219,7 @@ class MainWindow(QMainWindow):
         self.perf_mode = False
         self.last_tree_update = 0.0
         self.last_snapshot_path = None
+        self.last_handoff_manifest = None
         self.device_profiles = []
         self.auto_fit = True
         self.fps_counter = 0
@@ -324,6 +360,19 @@ class MainWindow(QMainWindow):
         btn_ref = QPushButton("Refresh List"); btn_ref.clicked.connect(self.refresh_devices)
         btn_ref.setToolTip("Rescan ADB for connected devices.")
 
+        ws_row = QHBoxLayout()
+        self.btn_add_workspace = QPushButton("Add Workspace")
+        self.btn_add_workspace.clicked.connect(self.add_current_workspace)
+        self.btn_remove_workspace = QPushButton("Remove Workspace")
+        self.btn_remove_workspace.clicked.connect(self.remove_active_workspace)
+        ws_row.addWidget(self.btn_add_workspace)
+        ws_row.addWidget(self.btn_remove_workspace)
+
+        self.tabs_workspace = QTabWidget()
+        self.tabs_workspace.setDocumentMode(True)
+        self.tabs_workspace.currentChanged.connect(self.on_workspace_tab_changed)
+        self.tabs_workspace.setToolTip("Device workspaces (up to 3 concurrent live sessions).")
+
         ip_row = QHBoxLayout()
         self.input_ip = QLineEdit(); self.input_ip.setPlaceholderText("IP:port (e.g., 192.168.0.20:5555)")
         self.input_ip.setToolTip("Connect to a device over Wi‑Fi using adb connect.")
@@ -357,6 +406,8 @@ class MainWindow(QMainWindow):
         prof_row.addWidget(self.combo_profiles); prof_row.addWidget(self.btn_reload_profiles)
 
         gl.addWidget(self.combo_dev); gl.addWidget(btn_ref)
+        gl.addLayout(ws_row)
+        gl.addWidget(self.tabs_workspace)
         gl.addLayout(ip_row)
         gl.addLayout(hist_row)
         gl.addLayout(adb_row)
@@ -376,6 +427,11 @@ class MainWindow(QMainWindow):
         self.combo_live_source.addItems(["Scrcpy (fast)", "ADB (compat)"])
         self.combo_live_source.setToolTip("Select the live video backend.")
         src_row.addWidget(lbl_src); src_row.addWidget(self.combo_live_source)
+
+        self.chk_emulator_beta = QCheckBox("Enable emulator beta support")
+        self.chk_emulator_beta.setChecked(self.settings.emulator_beta_enabled)
+        self.chk_emulator_beta.stateChanged.connect(self.toggle_emulator_beta)
+        self.chk_emulator_beta.setToolTip("Rack-first policy: emulator support is explicit beta.")
 
         scrcpy_row = QHBoxLayout()
         lbl_scrcpy = QLabel("Scrcpy Exe")
@@ -420,7 +476,7 @@ class MainWindow(QMainWindow):
         self.combo_display.currentIndexChanged.connect(self.on_display_change)
         display_row.addWidget(lbl_display); display_row.addWidget(self.combo_display)
 
-        ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo); ll.addLayout(src_row); ll.addLayout(scrcpy_row)
+        ll.addWidget(self.btn_live); ll.addWidget(self.chk_turbo); ll.addLayout(src_row); ll.addWidget(self.chk_emulator_beta); ll.addLayout(scrcpy_row)
         ll.addWidget(self.chk_scrcpy_auto); ll.addWidget(self.chk_scrcpy_hide); ll.addWidget(self.chk_scrcpy_raw); ll.addLayout(res_row); ll.addLayout(display_row)
         gb_live.setLayout(ll); l.addWidget(gb_live)
 
@@ -447,7 +503,32 @@ class MainWindow(QMainWindow):
         self.btn_recapture = QPushButton("Re-Capture Last"); self.btn_recapture.clicked.connect(self.recapture_last_snapshot)
         self.btn_recapture.setToolTip("Re-capture the last loaded snapshot using the active device.")
         self.btn_recapture.setEnabled(False)
+
+        maestro_row = QHBoxLayout()
+        self.input_maestro_workspace = QLineEdit()
+        self.input_maestro_workspace.setPlaceholderText("Maestro workspace path")
+        self.input_maestro_workspace.setText(self.settings.maestro_workspace_path)
+        self.input_maestro_workspace.editingFinished.connect(self.save_maestro_workspace)
+        self.btn_maestro_browse = QPushButton("Browse")
+        self.btn_maestro_browse.clicked.connect(self.browse_maestro_workspace)
+        maestro_row.addWidget(self.input_maestro_workspace)
+        maestro_row.addWidget(self.btn_maestro_browse)
+
+        self.btn_export_handoff = QPushButton("Export To Maestro")
+        self.btn_export_handoff.clicked.connect(self.export_active_session_to_maestro)
+        self.btn_open_handoff = QPushButton("Open Handoff Folder")
+        self.btn_open_handoff.clicked.connect(self.open_last_handoff_folder)
+        self.btn_copy_handoff = QPushButton("Copy Manifest Path")
+        self.btn_copy_handoff.clicked.connect(self.copy_last_handoff_manifest)
+        self.btn_open_maestro_flows = QPushButton("Open Maestro Flows")
+        self.btn_open_maestro_flows.clicked.connect(self.open_maestro_flows)
+
         sl.addWidget(btn_cap); sl.addWidget(btn_load); sl.addWidget(self.btn_recapture)
+        sl.addLayout(maestro_row)
+        sl.addWidget(self.btn_export_handoff)
+        sl.addWidget(self.btn_open_handoff)
+        sl.addWidget(self.btn_copy_handoff)
+        sl.addWidget(self.btn_open_maestro_flows)
         gb_snap.setLayout(sl); l.addWidget(gb_snap)
 
         gb_opts = QGroupBox("UX Options"); ol = QVBoxLayout()
@@ -830,6 +911,181 @@ class MainWindow(QMainWindow):
             self.apply_chrome_overlay(translucent=True)
             self.log_sys("Ambient video loaded")
 
+    def _workspace_label(self, workspace: DeviceWorkspace) -> str:
+        live = bool(workspace.video_thread)
+        mark = "●" if live else "○"
+        return f"{mark} {workspace.model} ({workspace.serial})"
+
+    def _active_workspace(self) -> Optional[DeviceWorkspace]:
+        if not self.active_workspace_serial:
+            return None
+        return self.workspaces.get(self.active_workspace_serial)
+
+    def ensure_workspace(self, serial: str, model: str = "Unknown") -> Optional[DeviceWorkspace]:
+        serial = (serial or "").strip()
+        if not serial:
+            return None
+        if serial in self.workspaces:
+            ws = self.workspaces[serial]
+            if model and model != "Unknown":
+                ws.model = model
+            return ws
+        if len(self.workspaces) >= self.settings.max_concurrent_devices:
+            self.log_sys(f"Workspace limit reached ({self.settings.max_concurrent_devices}). Remove one before adding another.")
+            return None
+        ws = DeviceWorkspace(serial=serial, model=model or "Unknown")
+        self.workspaces[serial] = ws
+        self.workspace_serials.append(serial)
+        self._refresh_workspace_tabs()
+        return ws
+
+    def _refresh_workspace_tabs(self) -> None:
+        if not hasattr(self, "tabs_workspace"):
+            return
+        current = self.active_workspace_serial
+        self.tabs_workspace.blockSignals(True)
+        self.tabs_workspace.clear()
+        for serial in self.workspace_serials:
+            ws = self.workspaces.get(serial)
+            if not ws:
+                continue
+            tab_widget = QWidget()
+            self.tabs_workspace.addTab(tab_widget, self._workspace_label(ws))
+        if current and current in self.workspace_serials:
+            idx = self.workspace_serials.index(current)
+            self.tabs_workspace.setCurrentIndex(idx)
+        self.tabs_workspace.blockSignals(False)
+
+    def on_workspace_tab_changed(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self.workspace_serials):
+            return
+        serial = self.workspace_serials[idx]
+        self.set_active_workspace(serial)
+
+    def add_current_workspace(self) -> None:
+        idx = self.combo_dev.currentIndex()
+        serial = self.combo_dev.itemData(idx)
+        if not serial:
+            return
+        label = self.combo_dev.currentText()
+        model = label.split(" (", 1)[0] if label else "Unknown"
+        ws = self.ensure_workspace(serial, model=model)
+        if ws:
+            self.set_active_workspace(serial)
+
+    def remove_active_workspace(self) -> None:
+        ws = self._active_workspace()
+        if not ws:
+            return
+        serial = ws.serial
+        if ws.video_thread:
+            self.stop_live_for_workspace(ws)
+        self.workspaces.pop(serial, None)
+        self.workspace_serials = [item for item in self.workspace_serials if item != serial]
+        self.active_workspace_serial = None
+        self.active_device = None
+        self._refresh_workspace_tabs()
+        if self.workspace_serials:
+            self.set_active_workspace(self.workspace_serials[0])
+        else:
+            self.btn_live.setText("START LIVE STREAM")
+            self.btn_live.setProperty("class", "primary")
+            self.polish_btn(self.btn_live)
+            self.txt_log.setText("")
+            self.lbl_focus.setText("Focus: -")
+            self.log_sys(f"Workspace removed: {serial}")
+
+    def set_active_workspace(self, serial: str) -> None:
+        if not serial or serial not in self.workspaces:
+            return
+        prev = self._active_workspace()
+        if prev and prev.serial != serial:
+            self._store_workspace_view_state(prev)
+
+        self.active_workspace_serial = serial
+        ws = self.workspaces[serial]
+        self.active_device = serial
+        self.selected_display_id = ws.selected_display_id
+        AdbManager.set_preferred_display_id(serial, ws.selected_display_id)
+        self.last_snapshot_path = ws.last_snapshot_path
+        self.last_handoff_manifest = ws.last_handoff_manifest
+
+        # Keep combo device selection synchronized with workspace selection.
+        if hasattr(self, "combo_dev"):
+            for idx in range(self.combo_dev.count()):
+                if self.combo_dev.itemData(idx) == serial:
+                    self.combo_dev.blockSignals(True)
+                    self.combo_dev.setCurrentIndex(idx)
+                    self.combo_dev.blockSignals(False)
+                    break
+
+        self._bind_active_workspace_threads()
+        self._load_workspace_view_state(ws)
+        self.update_display_combo()
+        self._apply_background_scheduler()
+        self._refresh_workspace_tabs()
+
+    def _bind_active_workspace_threads(self) -> None:
+        ws = self._active_workspace()
+        self.video_thread = ws.video_thread if ws else None
+        self.xml_thread = ws.xml_thread if ws else None
+        self.log_thread = ws.log_thread if ws else None
+        self.focus_thread = ws.focus_thread if ws else None
+        live = bool(ws and ws.video_thread)
+        self.btn_live.setText("STOP LIVE" if live else "START LIVE STREAM")
+        self.btn_live.setProperty("class", "danger" if live else "primary")
+        self.polish_btn(self.btn_live)
+
+    def _store_workspace_view_state(self, ws: DeviceWorkspace) -> None:
+        ws.last_frame_image = self.last_frame_image.copy() if self.last_frame_image and not self.last_frame_image.isNull() else ws.last_frame_image
+        ws.last_frame_size = self.last_frame_size
+        ws.stream_scale = self.stream_scale
+        ws.dump_bounds = self.dump_bounds
+        ws.device_bounds = self.device_bounds
+        ws.last_snapshot_path = self.last_snapshot_path
+        ws.last_handoff_manifest = self.last_handoff_manifest
+
+    def _load_workspace_view_state(self, ws: DeviceWorkspace) -> None:
+        self.last_frame_image = ws.last_frame_image.copy() if ws.last_frame_image and not ws.last_frame_image.isNull() else None
+        self.last_frame_size = ws.last_frame_size
+        self.stream_scale = ws.stream_scale if ws.stream_scale else 1.0
+        self.dump_bounds = ws.dump_bounds
+        self.device_bounds = ws.device_bounds
+
+        if ws.last_frame_image and not ws.last_frame_image.isNull():
+            self.on_frame(ws.last_frame_image)
+        else:
+            if self.pixmap_item:
+                self.scene.removeItem(self.pixmap_item)
+                self.pixmap_item = None
+            self.rect_item.hide()
+
+        if ws.last_xml:
+            self.on_tree_data(ws.last_xml, True)
+        else:
+            self.tree.clear()
+            self.current_node_map = {}
+            self.node_to_item_map = {}
+            self.rect_map = []
+            self.tbl_props.setRowCount(0)
+
+        self.txt_log.setText("\n".join(ws.log_lines[-5000:]))
+        self.lbl_focus.setText(f"Focus: {ws.focus_text}")
+
+    def _apply_background_scheduler(self) -> None:
+        active_serial = self.active_workspace_serial
+        for serial, ws in self.workspaces.items():
+            if not ws.video_thread or not hasattr(ws.video_thread, "set_target_fps"):
+                continue
+            active = serial == active_serial
+            if isinstance(ws.video_thread, ScrcpyVideoSource):
+                target = 20 if self.perf_mode else 30
+                bg = 8
+            else:
+                target = 4 if self.perf_mode else 8
+                bg = 2
+            ws.video_thread.set_target_fps(target if active else bg)
+
     def refresh_devices(self):
         self.combo_dev.blockSignals(True); self.combo_dev.clear()
         devs = AdbManager.get_devices_detailed()
@@ -842,109 +1098,215 @@ class MainWindow(QMainWindow):
             self.combo_dev.addItem(label, d['serial'])
             self.device_states[d['serial']] = state
             AdbManager.record_device(d['serial'], d['model'])
+            if d.get("state") == "device":
+                if d["serial"] in self.workspaces:
+                    self.workspaces[d["serial"]].model = d.get("model", "Unknown")
         self.combo_dev.blockSignals(False)
         if devs:
             online_idx = next((i for i, d in enumerate(devs) if d.get("state") == "device"), None)
             if online_idx is not None:
                 self.on_dev_change(online_idx)
+        self._refresh_workspace_tabs()
         self.update_history_combo()
         self.log_sys(f"Devices refreshed: {len(devs)} found")
 
     def on_dev_change(self, idx):
-        self.active_device = self.combo_dev.itemData(idx)
-        if self.active_device:
+        serial = self.combo_dev.itemData(idx)
+        if serial:
             self._root_prompted = False
-            state = getattr(self, "device_states", {}).get(self.active_device, "device")
+            state = getattr(self, "device_states", {}).get(serial, "device")
             if state != "device":
                 self.log_sys(f"Selected device state is '{state}'. Reconnect or authorize the device.")
                 return
-            self.log_sys(f"Active device set: {self.active_device}")
+            model = self.combo_dev.currentText().split(" (", 1)[0]
+            ws = self.ensure_workspace(serial, model=model)
+            if not ws:
+                return
+            self.set_active_workspace(serial)
+            self.log_sys(f"Active device set: {serial}")
             self.log_device_info()
-            self.update_display_combo()
 
     def toggle_live(self):
-        if self.video_thread:
-            # Stop
-            self.video_thread.stop_stream(); self.video_thread = None
-            self.xml_thread.stop(); self.xml_thread = None
-            self.log_thread.stop(); self.log_thread = None
-            self.focus_thread.stop(); self.focus_thread = None
-            self.view.control_enabled = False
-            self.btn_live.setText("START LIVE STREAM"); self.btn_live.setProperty("class", "primary")
-            self.log_sys("Live mirror stopped")
-        else:
-            if not self.active_device:
-                self.log_sys("Live mirror requested but no device is selected")
+        ws = self._active_workspace()
+        if not ws:
+            self.log_sys("Live mirror requested but no workspace is selected")
+            return
+
+        if ws.video_thread:
+            self.stop_live_for_workspace(ws)
+            self.log_sys(f"Live mirror stopped on {ws.serial}")
+            self._bind_active_workspace_threads()
+            self._apply_background_scheduler()
+            self._refresh_workspace_tabs()
+            return
+
+        serial = ws.serial
+        if not serial:
+            self.log_sys("Live mirror requested but no device is selected")
+            return
+
+        caps = detect_capabilities(serial, emulator_beta_enabled=self.settings.emulator_beta_enabled)
+        ws.environment_type = caps.environment_type
+        ws.profile = caps.profile
+        if caps.environment_type == "emulator" and not self.settings.emulator_beta_enabled:
+            self.log_sys("Emulator detected. Enable 'emulator beta support' to start live capture on emulator targets.")
+            return
+
+        self.txt_log.setText("Starting logcat...")
+        target_fps = 4 if self.perf_mode else 8
+        source_text = self.combo_live_source.currentText() if hasattr(self, "combo_live_source") else "Scrcpy (fast)"
+        if "Scrcpy" in source_text:
+            self.scrcpy_path = self.resolve_scrcpy_path()
+            if not self.scrcpy_path:
+                QMessageBox.warning(
+                    self,
+                    "Scrcpy not found",
+                    "scrcpy.exe was not found. Build scrcpy in the local scrcpy-3.3.4 repo or set the path to your scrcpy 3.3.4 binary.",
+                )
                 return
-            # Start
-            self.txt_log.setText("Starting logcat...")
-            target_fps = 4 if self.perf_mode else 8
-            source_text = self.combo_live_source.currentText() if hasattr(self, "combo_live_source") else "Scrcpy (fast)"
-            if "Scrcpy" in source_text:
-                self.scrcpy_path = self.resolve_scrcpy_path()
-                if not self.scrcpy_path:
-                    QMessageBox.warning(
-                        self,
-                        "Scrcpy not found",
-                        "scrcpy.exe was not found. Build scrcpy in the local scrcpy-3.3.4 repo or set the path to your scrcpy 3.3.4 binary.",
-                    )
-                    return
-                if self.chk_scrcpy_auto.isChecked():
-                    self.update_scrcpy_repo()
-                scrcpy_fps = 20 if self.perf_mode else 30
-                scrcpy_server = self.find_scrcpy_server(self.scrcpy_path)
-                self.video_thread = ScrcpyVideoSource(
-                    self.active_device,
-                    max_size=self.stream_max_size,
-                    max_fps=scrcpy_fps,
-                    bitrate=2_000_000,
-                    scrcpy_path=self.scrcpy_path or None,
-                    hide_window=(not self.chk_scrcpy_hide.isChecked()) if hasattr(self, "chk_scrcpy_hide") else True,
-                    prefer_raw=self.chk_scrcpy_raw.isChecked() if hasattr(self, "chk_scrcpy_raw") else True,
-                    display_id=self.selected_display_id,
-                    server_path=scrcpy_server or None,
-                )
-                self.video_thread.log_line.connect(self.log_sys)
-                self.log_sys(f"Live source: Scrcpy (fast) | bin: {self.scrcpy_path}")
-                if scrcpy_server:
-                    self.log_sys(f"Scrcpy server: {scrcpy_server}")
-                self.log_sys(
-                    "Scrcpy settings: "
-                    f"max_size={self.stream_max_size or 'native'} "
-                    f"fps={scrcpy_fps} bitrate=2000000 "
-                    f"window={'shown' if self.chk_scrcpy_hide.isChecked() else 'hidden'} "
-                    f"raw={'on' if self.chk_scrcpy_raw.isChecked() else 'off'}"
-                )
-                self.log_sys("Scrcpy output will appear below as it connects...")
-            else:
-                self.video_thread = VideoThread(self.active_device, target_fps=target_fps)
-                self.log_sys("Live source: ADB (compat)")
-            self.video_thread.frame_ready.connect(self.on_frame)
-            self.video_thread.start_stream()
-            
-            self.xml_thread = HierarchyThread(self.active_device)
-            self.xml_thread.tree_ready.connect(self.on_tree_data)
-            self.xml_thread.dump_error.connect(self.on_dump_error)
-            self.xml_thread.start()
-            
-            self.log_thread = LogcatThread(self.active_device)
-            self.log_thread.log_line.connect(lambda l: self.txt_log.append(l))
-            self.log_thread.start()
-            
-            self.focus_thread = FocusMonitorThread(self.active_device)
-            self.focus_thread.focus_changed.connect(self.on_focus_changed)
-            self.focus_thread.start()
-            
-            self.view.control_enabled = True
-            self.btn_live.setText("STOP LIVE"); self.btn_live.setProperty("class", "danger")
-            self.log_sys(f"Live mirror started on {self.active_device}")
-            if hasattr(self.video_thread, "target_fps"):
-                self.log_sys(f"Live capture target FPS: {self.video_thread.target_fps}")
-            self.log_device_info()
-        
-        self.polish_btn(self.btn_live)
+            if self.chk_scrcpy_auto.isChecked():
+                self.update_scrcpy_repo()
+            scrcpy_fps = 20 if self.perf_mode else 30
+            scrcpy_server = self.find_scrcpy_server(self.scrcpy_path)
+            ws.video_thread = ScrcpyVideoSource(
+                serial,
+                max_size=self.stream_max_size,
+                max_fps=scrcpy_fps,
+                bitrate=2_000_000,
+                scrcpy_path=self.scrcpy_path or None,
+                hide_window=(not self.chk_scrcpy_hide.isChecked()) if hasattr(self, "chk_scrcpy_hide") else True,
+                prefer_raw=self.chk_scrcpy_raw.isChecked() if hasattr(self, "chk_scrcpy_raw") else True,
+                display_id=ws.selected_display_id,
+                server_path=scrcpy_server or None,
+            )
+            ws.video_thread.log_line.connect(lambda line, s=serial: self.on_workspace_log_line(s, line, source="scrcpy"))
+            self.log_sys(f"Live source: Scrcpy (fast) | {serial} | bin: {self.scrcpy_path}")
+            if scrcpy_server:
+                self.log_sys(f"Scrcpy server: {scrcpy_server}")
+        else:
+            ws.video_thread = VideoThread(serial, target_fps=target_fps)
+            self.log_sys(f"Live source: ADB (compat) | {serial}")
+
+        ws.video_thread.frame_ready.connect(lambda data, s=serial: self.on_workspace_frame(s, data))
+        ws.video_thread.start_stream()
+
+        ws.xml_thread = HierarchyThread(serial)
+        ws.xml_thread.tree_ready.connect(lambda xml, changed, s=serial: self.on_workspace_tree(s, xml, changed))
+        ws.xml_thread.dump_error.connect(lambda msg, s=serial: self.on_workspace_dump_error(s, msg))
+        ws.xml_thread.start()
+
+        ws.log_thread = LogcatThread(serial)
+        ws.log_thread.log_line.connect(lambda line, s=serial: self.on_workspace_log_line(s, line, source="logcat"))
+        ws.log_thread.start()
+
+        ws.focus_thread = FocusMonitorThread(serial)
+        ws.focus_thread.focus_changed.connect(lambda focus, s=serial: self.on_workspace_focus(s, focus))
+        ws.focus_thread.start()
+
+        if self.settings.auto_record_live:
+            model = ws.model or "Unknown"
+            try:
+                meta = AdbManager.get_device_meta(serial)
+                model = meta.get("model") or model
+            except Exception:
+                pass
+            ws.recorder = SessionRecorder.start_session(
+                session_root=self.settings.session_root_path(),
+                serial=serial,
+                model=model,
+                environment_type=ws.environment_type,
+                profile=ws.profile,
+                display_id=ws.selected_display_id,
+                session_max_bytes=self.settings.session_max_bytes,
+            )
+            ws.recorder.record_event("live_started", {"source": source_text})
+            self.log_sys(f"Session recorder started: {ws.recorder.session_dir}")
+
+        self.view.control_enabled = True
+        self.log_sys(f"Live mirror started on {serial}")
+        self._bind_active_workspace_threads()
+        self._apply_background_scheduler()
+        self._refresh_workspace_tabs()
+        self.log_device_info()
+
+    def stop_live_for_workspace(self, ws: DeviceWorkspace) -> None:
+        if ws.video_thread:
+            ws.video_thread.stop_stream()
+            ws.video_thread = None
+        if ws.xml_thread:
+            ws.xml_thread.stop()
+            ws.xml_thread = None
+        if ws.log_thread:
+            ws.log_thread.stop()
+            ws.log_thread = None
+        if ws.focus_thread:
+            ws.focus_thread.stop()
+            ws.focus_thread = None
+        if ws.recorder:
+            ws.recorder.record_event("live_stopped", {"serial": ws.serial})
+            ws.recorder.finish_session("stopped")
+            ws.recorder = None
+        if ws.serial == self.active_workspace_serial:
+            self.view.control_enabled = False
 
     def polish_btn(self, btn): btn.style().unpolish(btn); btn.style().polish(btn)
+
+    def on_workspace_frame(self, serial: str, data: Any) -> None:
+        ws = self.workspaces.get(serial)
+        if not ws:
+            return
+        img = data if isinstance(data, QImage) else QImage.fromData(data)
+        if img.isNull():
+            return
+        ws.last_frame_image = img.copy()
+        ws.last_frame_size = (img.width(), img.height())
+        if ws.recorder:
+            ws.recorder.record_frame(img, reason="periodic")
+        if serial == self.active_workspace_serial:
+            self.on_frame(img)
+            ws.stream_scale = self.stream_scale
+            ws.dump_bounds = self.dump_bounds
+            ws.device_bounds = self.device_bounds
+
+    def on_workspace_tree(self, serial: str, xml_str: str, changed: bool) -> None:
+        ws = self.workspaces.get(serial)
+        if not ws:
+            return
+        ws.last_xml = xml_str
+        if ws.recorder and changed:
+            ws.recorder.record_xml_dump(xml_str, reason="changed")
+        if serial == self.active_workspace_serial:
+            self.on_tree_data(xml_str, changed)
+            ws.dump_bounds = self.dump_bounds
+
+    def on_workspace_log_line(self, serial: str, line: str, source: str = "logcat") -> None:
+        ws = self.workspaces.get(serial)
+        if not ws:
+            return
+        ws.log_lines.append(line)
+        if len(ws.log_lines) > 8000:
+            ws.log_lines = ws.log_lines[-8000:]
+        if ws.recorder:
+            ws.recorder.record_log_line(line, source=source)
+        if serial == self.active_workspace_serial:
+            self.txt_log.append(line)
+
+    def on_workspace_focus(self, serial: str, focus: str) -> None:
+        ws = self.workspaces.get(serial)
+        if not ws:
+            return
+        ws.focus_text = focus
+        if ws.recorder:
+            ws.recorder.record_event("focus_changed", {"focus": focus})
+        if serial == self.active_workspace_serial:
+            self.on_focus_changed(focus)
+
+    def on_workspace_dump_error(self, serial: str, msg: str) -> None:
+        ws = self.workspaces.get(serial)
+        if ws and ws.recorder:
+            ws.recorder.record_event("dump_error", {"message": msg})
+        if serial == self.active_workspace_serial:
+            self.on_dump_error(msg)
 
     def on_frame(self, data):
         if isinstance(data, QImage):
@@ -968,6 +1330,7 @@ class MainWindow(QMainWindow):
             self.stream_scale = min(img.width() / orig_w, img.height() / orig_h)
         else:
             self.stream_scale = 1.0
+        prev_size = self.last_frame_size
         self.last_frame_size = (img.width(), img.height())
         if not self.pixmap_item:
             self.pixmap_item = self.scene.addPixmap(QPixmap.fromImage(img))
@@ -975,12 +1338,15 @@ class MainWindow(QMainWindow):
             self.handle_resize()
         else:
             self.pixmap_item.setPixmap(QPixmap.fromImage(img))
-        if self.last_frame_size == (img.width(), img.height()):
-            pass
-        else:
-            self.last_frame_size = (img.width(), img.height())
+        if prev_size != self.last_frame_size:
             self.log_sys(f"Live frame: {img.width()}x{img.height()} (dump bounds: {self.dump_bounds})")
         self.fps_counter += 1
+        ws = self._active_workspace()
+        if ws:
+            ws.last_frame_image = self.last_frame_image.copy() if self.last_frame_image else None
+            ws.last_frame_size = self.last_frame_size
+            ws.stream_scale = self.stream_scale
+            ws.dump_bounds = self.dump_bounds
 
     def update_fps(self):
         self.lbl_fps.setText(f"FPS: {self.fps_counter}")
@@ -989,11 +1355,14 @@ class MainWindow(QMainWindow):
     def log_device_info(self):
         if not self.active_device:
             return
+        ws = self._active_workspace()
         meta = AdbManager.get_device_meta(self.active_device)
         self.log_sys(f"Device model: {meta.get('model', 'Unknown')} | serial: {meta.get('serialno', 'n/a')}")
         size = AdbManager.get_screen_size(self.active_device)
         if size:
             self.device_bounds = (0, 0, size[0], size[1])
+            if ws:
+                ws.device_bounds = self.device_bounds
             self.log_sys(f"Display size: {size[0]}x{size[1]}")
         if not AdbManager.has_uiautomator_service(self.active_device):
             self.log_sys("⚠️ UIAutomator service not available on this device build. Live UI tree is unavailable.")
@@ -1013,6 +1382,8 @@ class MainWindow(QMainWindow):
         preferred = meta.get("preferred_display_id")
         if preferred:
             self.log_sys(f"Preferred display: {preferred}")
+        if ws:
+            self.log_sys(f"Workspace profile: {ws.profile} | environment: {ws.environment_type}")
 
     def update_display_combo(self) -> None:
         if not hasattr(self, "combo_display"):
@@ -1044,6 +1415,14 @@ class MainWindow(QMainWindow):
         if len(display_ids) > 1:
             self.log_sys(f"Multiple displays detected: {', '.join(display_ids)}. Use Display selector to switch.")
 
+        ws = self._active_workspace()
+        target_display = ws.selected_display_id if ws else None
+        if target_display is not None:
+            for i in range(self.combo_display.count()):
+                if self.combo_display.itemData(i) == target_display:
+                    self.combo_display.setCurrentIndex(i)
+                    break
+
         self.combo_display.blockSignals(False)
 
     def on_display_change(self, idx: int) -> None:
@@ -1051,6 +1430,11 @@ class MainWindow(QMainWindow):
             return
         display_id = self.combo_display.itemData(idx)
         self.selected_display_id = display_id
+        ws = self._active_workspace()
+        if ws:
+            ws.selected_display_id = display_id
+            if ws.recorder:
+                ws.recorder.record_event("display_changed", {"display_id": display_id})
         AdbManager.set_preferred_display_id(self.active_device, display_id)
         if display_id:
             self.log_sys(f"Display set to {display_id} for live capture and dumps")
@@ -1116,7 +1500,11 @@ class MainWindow(QMainWindow):
             if now - self.last_tree_update < 1.5:
                 return
             self.last_tree_update = now
-        
+
+        ws = self._active_workspace()
+        if ws:
+            ws.last_xml = xml_str
+
         root, parse_err = UixParser.parse(xml_str)
         self.root_node = root
         if root and root.valid_bounds:
@@ -1144,6 +1532,8 @@ class MainWindow(QMainWindow):
 
         if root and not self.rect_map:
             self.log_sys("Snapshot flagged: zero valid element bounds detected.")
+        if ws:
+            ws.dump_bounds = self.dump_bounds
         
         # Restore selection logic would go here
         
@@ -1203,6 +1593,9 @@ class MainWindow(QMainWindow):
             self.log_sys(f"   📋 Java: clickSystemCoordinate({int(dx)}, {int(dy)});")
             
             AdbManager.tap(self.active_device, dx, dy)
+            ws = self._active_workspace()
+            if ws and ws.recorder:
+                ws.recorder.record_event("tap", {"x": int(dx), "y": int(dy)})
             self.request_tree_refresh()
         else:
             # Lock selection in offline mode
@@ -1216,6 +1609,12 @@ class MainWindow(QMainWindow):
             dx2, dy2 = self.to_device_coords(x2, y2)
             self.log_sys(f"👆 Swipe Input: ({int(dx1)}, {int(dy1)}) -> ({int(dx2)}, {int(dy2)})")
             AdbManager.swipe(self.active_device, dx1, dy1, dx2, dy2)
+            ws = self._active_workspace()
+            if ws and ws.recorder:
+                ws.recorder.record_event(
+                    "swipe",
+                    {"x1": int(dx1), "y1": int(dy1), "x2": int(dx2), "y2": int(dy2)},
+                )
             self.request_tree_refresh()
 
     def select_node(self, node, scroll=True):
@@ -1282,9 +1681,19 @@ class MainWindow(QMainWindow):
             self.select_node(node, scroll=False)
 
     def capture_snapshot(self):
-        if not self.active_device: return
+        if not self.active_device:
+            return
         d = QFileDialog.getExistingDirectory(self, "Save Snapshot")
         if d:
+            ws = self._active_workspace()
+            if ws and ws.recorder and ws.video_thread:
+                path = ws.recorder.export_snapshot(destination_root=Path(d), bookmark_label="manual")
+                ws.last_snapshot_path = str(path)
+                self.last_snapshot_path = str(path)
+                self.btn_recapture.setEnabled(True)
+                self.log_sys(f"Snapshot bookmark exported from live session: {path}")
+                return
+
             path = os.path.join(d, f"snap_{int(time.time())}")
             AdbManager.capture_snapshot(self.active_device, path)
             if self.last_frame_image and not self.last_frame_image.isNull():
@@ -1294,6 +1703,8 @@ class MainWindow(QMainWindow):
                 self.log_sys("Snapshot image saved from ADB screencap")
             self.load_snapshot(path)
             self.last_snapshot_path = path
+            if ws:
+                ws.last_snapshot_path = path
             self.btn_recapture.setEnabled(True)
             self.log_sys(f"Snapshot captured: {path}")
 
@@ -1357,6 +1768,9 @@ class MainWindow(QMainWindow):
 
         self.log_sys(f"Loaded snapshot: {path}")
         self.last_snapshot_path = path
+        ws = self._active_workspace()
+        if ws:
+            ws.last_snapshot_path = path
         self.btn_recapture.setEnabled(True)
         
         self.setWindowTitle(f"QUANTUM Inspector - {os.path.basename(path)}")
@@ -1447,6 +1861,82 @@ class MainWindow(QMainWindow):
             self.log_sys(f"ADB connect {serial}: {res}")
         self.refresh_devices()
 
+    def toggle_emulator_beta(self) -> None:
+        self.settings.emulator_beta_enabled = self.chk_emulator_beta.isChecked()
+        self.settings.save()
+        state = "enabled" if self.settings.emulator_beta_enabled else "disabled"
+        self.log_sys(f"Emulator beta support {state}")
+
+    def save_maestro_workspace(self) -> None:
+        self.settings.maestro_workspace_path = self.input_maestro_workspace.text().strip()
+        self.settings.save()
+        if self.settings.maestro_workspace_path:
+            self.log_sys(f"Maestro workspace set: {self.settings.maestro_workspace_path}")
+
+    def browse_maestro_workspace(self) -> None:
+        d = QFileDialog.getExistingDirectory(self, "Select Maestro Workspace")
+        if not d:
+            return
+        self.input_maestro_workspace.setText(d)
+        self.save_maestro_workspace()
+
+    def export_active_session_to_maestro(self) -> None:
+        ws = self._active_workspace()
+        if not ws or not ws.recorder:
+            self.log_sys("No active live session recorder found for Maestro handoff export.")
+            return
+        workspace_path = self.input_maestro_workspace.text().strip()
+        if not workspace_path:
+            self.log_sys("Set a Maestro workspace path before exporting handoff.")
+            return
+        self.save_maestro_workspace()
+        result = export_session_handoff(
+            session_dir=ws.recorder.session_dir,
+            maestro_workspace=Path(workspace_path),
+            locator_suggestions=getattr(self, "current_suggestions", []),
+        )
+        ws.last_handoff_manifest = str(result["manifest_path"])
+        self.last_handoff_manifest = ws.last_handoff_manifest
+        self.log_sys(f"Maestro handoff exported: {result['export_dir']}")
+        self.log_sys(f"Handoff manifest: {result['manifest_path']}")
+
+    def open_last_handoff_folder(self) -> None:
+        manifest = self.last_handoff_manifest
+        if not manifest:
+            self.log_sys("No handoff manifest available to open.")
+            return
+        folder = Path(manifest).parent
+        if not folder.exists():
+            self.log_sys(f"Handoff folder not found: {folder}")
+            return
+        try:
+            os.startfile(str(folder))  # type: ignore[attr-defined]
+            self.log_sys(f"Opened handoff folder: {folder}")
+        except Exception as ex:
+            self.log_sys(f"Failed to open folder: {ex}")
+
+    def copy_last_handoff_manifest(self) -> None:
+        if not self.last_handoff_manifest:
+            self.log_sys("No handoff manifest available to copy.")
+            return
+        QApplication.clipboard().setText(self.last_handoff_manifest)
+        self.log_sys("Handoff manifest path copied to clipboard.")
+
+    def open_maestro_flows(self) -> None:
+        workspace_path = self.input_maestro_workspace.text().strip()
+        if not workspace_path:
+            self.log_sys("Set a Maestro workspace path before opening flows.")
+            return
+        flows = Path(workspace_path) / "flows"
+        if not flows.exists():
+            self.log_sys(f"Maestro flows folder not found: {flows}")
+            return
+        try:
+            os.startfile(str(flows))  # type: ignore[attr-defined]
+            self.log_sys(f"Opened Maestro flows folder: {flows}")
+        except Exception as ex:
+            self.log_sys(f"Failed to open Maestro flows folder: {ex}")
+
     def on_stream_size_change(self) -> None:
         text = self.combo_res.currentText()
         if text == "Native":
@@ -1504,8 +1994,9 @@ class MainWindow(QMainWindow):
         self.apply_chrome_overlay(translucent=False)
 
     def closeEvent(self, event):
-        if self.video_thread:
-            self.toggle_live()
+        for ws in list(self.workspaces.values()):
+            if ws.video_thread:
+                self.stop_live_for_workspace(ws)
         super().closeEvent(event)
 
     def on_ambient_status(self, status) -> None:
@@ -1629,6 +2120,9 @@ class MainWindow(QMainWindow):
 
     def on_focus_changed(self, focus: str) -> None:
         self.lbl_focus.setText(f"Focus: {focus}")
+        ws = self._active_workspace()
+        if ws:
+            ws.focus_text = focus
         self.request_tree_refresh("Focus changed", log=True)
 
     def set_tree_status(self, status: str, color: str = "#9aa7bd") -> None:
@@ -1699,6 +2193,9 @@ class MainWindow(QMainWindow):
             return
         AdbManager.capture_snapshot(self.active_device, self.last_snapshot_path)
         self.load_snapshot(self.last_snapshot_path)
+        ws = self._active_workspace()
+        if ws:
+            ws.last_snapshot_path = self.last_snapshot_path
         self.log_sys(f"Snapshot re-captured: {self.last_snapshot_path}")
 
     def toggle_perf_mode(self) -> None:
@@ -1707,11 +2204,8 @@ class MainWindow(QMainWindow):
             self.ambient_frame_interval_ms = 140
         else:
             self.ambient_frame_interval_ms = 90
-        if self.video_thread:
-            if isinstance(self.video_thread, ScrcpyVideoSource):
-                self.video_thread.set_target_fps(20 if self.perf_mode else 30)
-            else:
-                self.video_thread.set_target_fps(4 if self.perf_mode else 8)
+        self._apply_background_scheduler()
+        if self.video_thread and hasattr(self.video_thread, "target_fps"):
             self.log_sys(f"Live capture target FPS: {self.video_thread.target_fps}")
         self.log_sys(f"Performance mode: {'on' if self.perf_mode else 'off'}")
 
