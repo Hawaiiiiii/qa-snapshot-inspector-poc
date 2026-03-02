@@ -154,6 +154,14 @@ Run local hotspot profiling against your latest recorded session:
 .venv\Scripts\python.exe scripts\profile_hotspots.py
 ```
 
+Run with release acceptance thresholds:
+
+```bash
+.venv\Scripts\python.exe scripts\profile_hotspots.py --targets balanced --enforce-targets
+```
+
+Acceptance policy reference: [docs/PERFORMANCE_ACCEPTANCE.md](docs/PERFORMANCE_ACCEPTANCE.md)
+
 ## Live mirroring backend (scrcpy)
 
 QUANTUM uses **scrcpy** as the default high‑performance live mirror. We run scrcpy as a subprocess and capture frames from its window using the Windows API (PrintWindow) to keep the UI responsive and aligned with UI dumps.

@@ -84,3 +84,25 @@ This guarantees the screenshot matches the XML state the user saw.
 - Optional hardware‑accelerated decoding (DXVA) for PyAV.
 - Auto‑detect display focus changes to trigger UI tree refresh.
 - Session recorder (video + XML timeline).
+
+## 9) QUANTUM 2.0 closure highlights
+
+- Continuous recorder is now a first-class runtime service:
+  - live start creates a session,
+  - live stop finalizes it,
+  - crashes are propagated into active sessions.
+- Multi-device workspace scheduling now throttles background tabs across:
+  - video FPS,
+  - XML polling interval,
+  - focus polling interval,
+  - logcat emit cadence.
+- Capability-driven behavior is enforced in UI/actions:
+  - live start,
+  - snapshot capture,
+  - input injection,
+  - display switching,
+  - UI tree refresh.
+- Maestro handoff now exports a full `quantum_handoff.v1` manifest with:
+  - session/device/display context,
+  - deterministic artifact paths,
+  - locator bundle metadata.
