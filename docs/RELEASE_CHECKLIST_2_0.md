@@ -14,7 +14,7 @@ Use this checklist before publishing installer assets to GitHub Releases.
 Run:
 
 ```powershell
-.\scripts\release_gate.ps1
+.\scripts\release_gate.ps1 -RequirePython311
 ```
 
 Expected:
@@ -25,14 +25,26 @@ Expected:
 Optional strict performance check (requires recorded session):
 
 ```powershell
-.\scripts\release_gate.ps1 -Strict
+.\scripts\release_gate.ps1 -Strict -RequirePython311
 ```
 
 Optional executable build:
 
 ```powershell
-.\scripts\release_gate.ps1 -BuildExe
+.\scripts\release_gate.ps1 -BuildExe -RequirePython311
 ```
+
+Performance A/B capture helpers:
+
+```powershell
+.\scripts\perf_ab_capture.ps1 -Env local -Runs 3 -Session "C:\path\to\canonical_session" -RequireAllPass
+.\scripts\perf_ab_capture.ps1 -Env rdp -Runs 3 -Session "C:\path\to\canonical_session"
+```
+
+Notes:
+
+- `perf_ab_capture.ps1` enforces profiler targets by default (`--enforce-targets`).
+- Use `-SkipEnforceTargets` only for troubleshooting (not for release evidence).
 
 ## 3) CI gates
 
@@ -61,6 +73,12 @@ Optional executable build:
 - [ ] Emulator beta OFF blocks unsupported emulator actions with clear message.
 - [ ] Emulator beta ON allows emulator runtime paths.
 - [ ] Unsupported actions are disabled in UI where required.
+
+Emulator smoke helper:
+
+```powershell
+.\scripts\emulator_smoke.ps1 -Serial "emulator-5554"
+```
 
 ### Maestro handoff
 
