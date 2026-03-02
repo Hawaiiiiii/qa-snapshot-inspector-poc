@@ -5,14 +5,21 @@ This runbook executes the final signoff plan with reproducible commands and evid
 ## 1) Local release gates
 
 ```powershell
-.\scripts\release_gate.ps1 -RequirePython311
-.\scripts\release_gate.ps1 -BuildExe -RequirePython311
+.\scripts\release_gate.ps1
+.\scripts\release_gate.ps1 -BuildExe
 ```
 
 Optional strict hotspot gate (requires session with frames+xml):
 
 ```powershell
-.\scripts\release_gate.ps1 -Strict -RequirePython311
+.\scripts\release_gate.ps1 -Strict
+```
+
+Optional deterministic packaging baseline (exact Python 3.11):
+
+```powershell
+.\scripts\release_gate.ps1 -RequirePackagingBaseline311
+.\scripts\release_gate.ps1 -BuildExe -RequirePackagingBaseline311
 ```
 
 ## 2) Performance A/B evidence

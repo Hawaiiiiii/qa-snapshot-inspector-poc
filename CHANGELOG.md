@@ -6,6 +6,8 @@
 - Added release automation workflow for Windows packaging and executable artifact upload.
 - Added `scripts/release_gate.ps1` and `docs/RELEASE_CHECKLIST_2_0.md` for reproducible 2.0 signoff.
 - Added signoff runbook and evidence helpers for A/B perf capture and emulator smoke validation.
+- Updated release gates/docs to support Python >=3.11 (including 3.14) with optional 3.11-only packaging baseline enforcement.
+- Expanded CI/release workflows to validate test+compile on Python 3.11 and 3.14 while keeping Windows packaging pinned to 3.11.
 
 ## [2.0.0-rc2] - 2026-03-02
 

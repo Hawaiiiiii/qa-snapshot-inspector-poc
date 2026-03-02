@@ -1,7 +1,8 @@
 ﻿param(
     [switch]$BuildExe = $false,
     [switch]$Strict = $false,
-    [switch]$RequirePython311 = $false
+    [switch]$RequirePython311 = $false,
+    [switch]$RequirePackagingBaseline311 = $false
 )
 
 $ErrorActionPreference = 'Stop'
@@ -16,12 +17,25 @@ if (-not (Test-Path $python)) {
 Write-Host "[gate] Python: $python"
 & $python --version
 
-$pyShort = (& $python -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
-if ($RequirePython311 -and ($pyShort -ne "3.11")) {
-    throw "Python 3.11.x is required for this gate; found $pyShort"
+$pyVersion = (& $python -c "import sys;print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')").Trim()
+$versionParts = $pyVersion.Split('.')
+$pyMajor = [int]$versionParts[0]
+$pyMinor = [int]$versionParts[1]
+
+if (($pyMajor -lt 3) -or (($pyMajor -eq 3) -and ($pyMinor -lt 11))) {
+    throw "Python >=3.11 is required for this gate; found $pyVersion"
 }
-if ($pyShort -ne "3.11") {
-    Write-Warning "Final 2.0 packaging baseline is Python 3.11.x (current: $pyShort)."
+
+$enforcePackagingBaseline311 = $RequirePython311 -or $RequirePackagingBaseline311
+if ($RequirePython311 -and -not $RequirePackagingBaseline311) {
+    Write-Warning "-RequirePython311 is deprecated; use -RequirePackagingBaseline311."
+}
+if ($enforcePackagingBaseline311 -and -not (($pyMajor -eq 3) -and ($pyMinor -eq 11))) {
+    throw "Python 3.11.x packaging baseline is required for this gate; found $pyVersion"
+}
+
+if (($pyMajor -gt 3) -or (($pyMajor -eq 3) -and ($pyMinor -gt 14))) {
+    Write-Warning "Python $pyVersion is newer than validated 2.0 set (3.11 and 3.14)."
 }
 
 Write-Host "[gate] pytest"

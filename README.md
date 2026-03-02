@@ -104,6 +104,7 @@ UI_Example: guidance screenshot to explain what each section shows when you open
 ## Prerequisites
 
 - Python 3.11+
+- Validated in CI on Python 3.11 and Python 3.14
 - Windows 11 (designed for, but works on macOS/Linux)
 - ADB (optional, for live mirror + capture)
 
@@ -170,7 +171,13 @@ Acceptance policy reference: [docs/PERFORMANCE_ACCEPTANCE.md](docs/PERFORMANCE_A
 Run the local 2.0 release gate:
 
 ```powershell
-.\scripts\release_gate.ps1 -RequirePython311
+.\scripts\release_gate.ps1
+```
+
+Optional deterministic packaging baseline gate (exact 3.11):
+
+```powershell
+.\scripts\release_gate.ps1 -RequirePackagingBaseline311
 ```
 
 Signoff automation helpers:
