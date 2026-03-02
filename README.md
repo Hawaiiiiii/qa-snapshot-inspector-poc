@@ -73,6 +73,7 @@ V1 PoC (current build).
 | Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 | Performance Acceptance | [docs/PERFORMANCE_ACCEPTANCE.md](docs/PERFORMANCE_ACCEPTANCE.md) |
 | Release Checklist | [docs/RELEASE_CHECKLIST_2_0.md](docs/RELEASE_CHECKLIST_2_0.md) |
+| Signoff Runbook | [docs/SIGNOFF_RUNBOOK_2_0.md](docs/SIGNOFF_RUNBOOK_2_0.md) |
 
 ## Visuals
 
@@ -169,7 +170,15 @@ Acceptance policy reference: [docs/PERFORMANCE_ACCEPTANCE.md](docs/PERFORMANCE_A
 Run the local 2.0 release gate:
 
 ```powershell
-.\scripts\release_gate.ps1
+.\scripts\release_gate.ps1 -RequirePython311
+```
+
+Signoff automation helpers:
+
+```powershell
+.\scripts\perf_ab_capture.ps1 -Env local -Runs 3 -Session "C:\path\to\canonical_session" -RequireAllPass
+.\scripts\perf_ab_capture.ps1 -Env rdp -Runs 3 -Session "C:\path\to\canonical_session"
+.\scripts\emulator_smoke.ps1 -Serial "emulator-5554"
 ```
 
 ## Live mirroring backend (scrcpy)

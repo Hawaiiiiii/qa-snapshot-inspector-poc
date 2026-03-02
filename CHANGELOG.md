@@ -5,6 +5,7 @@
 - Ongoing PoC improvements
 - Added release automation workflow for Windows packaging and executable artifact upload.
 - Added `scripts/release_gate.ps1` and `docs/RELEASE_CHECKLIST_2_0.md` for reproducible 2.0 signoff.
+- Added signoff runbook and evidence helpers for A/B perf capture and emulator smoke validation.
 
 ## [2.0.0-rc2] - 2026-03-02
 
