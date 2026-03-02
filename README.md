@@ -71,6 +71,8 @@ V1 PoC (current build).
 | Implementation Log | [docs/IMPLEMENTATION_LOG.md](docs/IMPLEMENTATION_LOG.md) |
 | Usage Guide | [docs/USAGE_GUIDE.md](docs/USAGE_GUIDE.md) |
 | Troubleshooting | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+| Performance Acceptance | [docs/PERFORMANCE_ACCEPTANCE.md](docs/PERFORMANCE_ACCEPTANCE.md) |
+| Release Checklist | [docs/RELEASE_CHECKLIST_2_0.md](docs/RELEASE_CHECKLIST_2_0.md) |
 
 ## Visuals
 
@@ -161,6 +163,14 @@ Run with release acceptance thresholds:
 ```
 
 Acceptance policy reference: [docs/PERFORMANCE_ACCEPTANCE.md](docs/PERFORMANCE_ACCEPTANCE.md)
+
+## Release Gate
+
+Run the local 2.0 release gate:
+
+```powershell
+.\scripts\release_gate.ps1
+```
 
 ## Live mirroring backend (scrcpy)
 
