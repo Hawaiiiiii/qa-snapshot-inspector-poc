@@ -20,4 +20,7 @@ dist/
 build/
 *.spec
 captures/
+docs/evidence/perf/local_*/
+docs/evidence/perf/rdp_*/
+docs/evidence/emulator/smoke_*/
 
