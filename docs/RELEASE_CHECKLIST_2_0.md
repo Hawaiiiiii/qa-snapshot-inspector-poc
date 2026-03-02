@@ -78,6 +78,18 @@ Notes:
 - [ ] Active/background scheduling behaves as expected (active stays responsive).
 - [ ] No cross-device leakage in tree, overlays, or logs.
 
+Helper for G70 HU/CDE/RSE endpoint validation:
+
+```powershell
+.\scripts\rack_multidevice_signoff.ps1
+```
+
+You can override default G70 endpoints:
+
+```powershell
+.\scripts\rack_multidevice_signoff.ps1 -Hu "169.254.166.99:5555" -Cde "169.254.166.167:5555" -Rse "169.254.166.152:5555"
+```
+
 ### Capability gating
 
 - [ ] Emulator beta OFF blocks unsupported emulator actions with clear message.
@@ -96,10 +108,26 @@ Emulator smoke helper:
 - [ ] `quantum_handoff.json` exists and references real files.
 - [ ] "Open folder", "Copy manifest path", and "Open Maestro flows" actions work.
 
+Helper for workspace + manifest path resolution check:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\maestro_signoff_check.py --workspace "C:\Users\DavidErikGarciaArena\Documents\GitHub\radio-maestro-regression"
+```
+
 ### Performance and stability
 
 - [ ] `scripts/profile_hotspots.py --targets balanced --enforce-targets` passes on representative machine/session.
 - [ ] No sustained runaway memory growth in long live session.
+
+### Crash resilience
+
+- [ ] Forced crash during active live session preserves pre-crash artifacts and writes crash marker.
+
+Helper for recorder-level forced crash preservation contract:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_forced_crash_signoff.py
+```
 
 ## 5) Packaging and publishing
 

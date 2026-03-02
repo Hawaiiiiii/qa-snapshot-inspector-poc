@@ -186,6 +186,9 @@ Signoff automation helpers:
 .\scripts\perf_ab_capture.ps1 -Env local -Runs 3 -Session "C:\path\to\canonical_session" -RequireAllPass
 .\scripts\perf_ab_capture.ps1 -Env rdp -Runs 3 -Session "C:\path\to\canonical_session"
 .\scripts\emulator_smoke.ps1 -Serial "emulator-5554"
+.\.venv\Scripts\python.exe scripts\verify_forced_crash_signoff.py
+.\.venv\Scripts\python.exe scripts\maestro_signoff_check.py --workspace "C:\Users\DavidErikGarciaArena\Documents\GitHub\radio-maestro-regression"
+.\scripts\rack_multidevice_signoff.ps1
 ```
 
 ## Live mirroring backend (scrcpy)
