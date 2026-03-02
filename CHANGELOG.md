@@ -8,6 +8,9 @@
 - Added signoff runbook and evidence helpers for A/B perf capture and emulator smoke validation.
 - Updated release gates/docs to support Python >=3.11 (including 3.14) with optional 3.11-only packaging baseline enforcement.
 - Expanded CI/release workflows to validate test+compile on Python 3.11 and 3.14 while keeping Windows packaging pinned to 3.11.
+- Added forced-crash signoff validator and Maestro handoff validation helper scripts.
+- Added rack multi-device (HU/CDE/RSE) endpoint signoff helper script for G70 workflows.
+- Added GUI deep-link tests for timeline and Maestro open-folder actions.
 
 ## [2.0.0-rc2] - 2026-03-02
 

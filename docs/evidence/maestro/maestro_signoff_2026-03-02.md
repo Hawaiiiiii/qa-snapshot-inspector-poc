@@ -14,11 +14,15 @@
    - `schema = quantum_handoff.v1`, `schema_version = 1`.
 4. Artifact resolution:
    - Validated manifest-referenced files; `missing = 0`.
+5. Workspace compatibility check:
+   - `scripts/maestro_signoff_check.py --workspace <radio-maestro-regression>` passed.
+   - Verified workspace path, `flows/` path, manifest schema/version, and artifact path resolution.
 
 ## Results
 - Pass: evidence export path and deterministic structure
 - Pass: manifest schema/version
 - Pass: manifest file references resolve to real exported files
+- Pass: automated workspace + manifest compatibility check
 
 ## Remaining Maestro blocking items (manual UI)
 - Validate in-app deep-link actions end-to-end:

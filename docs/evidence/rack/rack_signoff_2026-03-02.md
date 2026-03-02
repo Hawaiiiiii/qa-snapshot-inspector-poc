@@ -21,18 +21,26 @@
 5. Strict hotspot gate:
    - `scripts/profile_hotspots.py --targets balanced --enforce-targets` passed on seeded rack session.
    - `scripts/release_gate.ps1 -Strict` passed.
+6. Forced-crash preservation contract:
+   - `scripts/verify_forced_crash_signoff.py` passed.
+   - Report schema: `quantum_forced_crash_check.v1`.
+   - Verified `session_dir_exists`, `frame_preserved`, `xml_preserved`, `crash_file_present`, and `db_has_crash_event` were all `true`.
+7. G70 multi-device endpoint precheck:
+   - `scripts/rack_multidevice_signoff.ps1 -SkipScrcpy` executed with HU/CDE/RSE defaults.
+   - Expected fail in current environment because the three G70 endpoints were not connected/reachable.
 
 ## Results
 - Pass: rack connectivity
 - Pass: XML dump retrieval
 - Pass: strict hotspot acceptance on real rack-derived session
+- Pass: forced-crash recorder preservation contract
 - Partial: direct `screencap -d <id>` path fails on protected/multi-display surfaces (`Status: -2`)
 
 ## Remaining rack blocking items (not completed in this run)
 - 30-minute 1-device stability run
 - 20-minute 2-device concurrent run
 - 10-minute 3-device concurrent run
-- Forced crash preservation verification during active live session
+- Forced crash during active full live workflow (manual GUI run, beyond recorder-level contract)
 
 ## Notes
 - A real recorder bug was found and fixed during this run: session directory generation now sanitizes invalid serial characters (for example `?`) in `SessionRecorder.start_session()`.

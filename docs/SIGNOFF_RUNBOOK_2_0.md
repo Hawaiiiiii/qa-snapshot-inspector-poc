@@ -74,6 +74,24 @@ Recommended evidence files:
 - `maestro_signoff_<date>.md`
 - critical exported manifests (`quantum_handoff.json`)
 
+Multi-device rack endpoint precheck (G70 defaults):
+
+```powershell
+.\scripts\rack_multidevice_signoff.ps1
+```
+
+Crash-preservation contract check:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify_forced_crash_signoff.py
+```
+
+Maestro handoff package compatibility check:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\maestro_signoff_check.py --workspace "C:\Users\DavidErikGarciaArena\Documents\GitHub\radio-maestro-regression"
+```
+
 ## 5) Final release promotion
 
 After blocking signoff passes:
