@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsRectItem, QFileDialog, QTextEdit,
     QGroupBox, QComboBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QToolBar, QTabWidget, QStatusBar, QFrame, QDockWidget, QApplication, QLineEdit, QCheckBox, QMessageBox,
-    QMenu, QToolButton, QScrollArea, QAbstractItemView
+    QMenu, QToolButton, QScrollArea, QAbstractItemView, QListWidget
 )
 from PySide6.QtGui import QPixmap, QPen, QBrush, QImage, QColor, QAction, QPainter, QCursor, QLinearGradient, QPalette, QGuiApplication
 from PySide6.QtCore import QUrl
@@ -304,10 +304,15 @@ class MainWindow(QMainWindow):
         act_fit = QAction("Fit Screen", self); act_fit.triggered.connect(self.enable_fit)
         act_11 = QAction("1:1 Pixel", self); act_11.triggered.connect(self.disable_fit)
         act_center = QAction("Center Window", self); act_center.triggered.connect(self.center_window)
+        act_layout_balanced = QAction("Layout: Balanced", self); act_layout_balanced.triggered.connect(lambda: self.apply_layout_mode("balanced"))
+        act_layout_live = QAction("Layout: Live Focus", self); act_layout_live.triggered.connect(lambda: self.apply_layout_mode("live"))
+        act_layout_timeline = QAction("Layout: Timeline Focus", self); act_layout_timeline.triggered.connect(lambda: self.apply_layout_mode("timeline"))
+        act_layout_inspector = QAction("Layout: Inspector Focus", self); act_layout_inspector.triggered.connect(lambda: self.apply_layout_mode("inspector"))
         
         tb.addWidget(self.lbl_fps); tb.addWidget(self.lbl_coords); tb.addSeparator(); tb.addWidget(self.lbl_focus)
         tb.addSeparator(); tb.addWidget(self.lbl_tree_status); tb.addSeparator(); tb.addWidget(self.lbl_perf); tb.addWidget(self.lbl_native)
         tb.addSeparator(); tb.addAction(act_fit); tb.addAction(act_11); tb.addAction(act_center)
+        tb.addSeparator(); tb.addAction(act_layout_balanced); tb.addAction(act_layout_live); tb.addAction(act_layout_timeline); tb.addAction(act_layout_inspector)
 
         self.panels_menu = QMenu("Panels", self)
         self.menuBar().addMenu(self.panels_menu)
@@ -341,11 +346,12 @@ class MainWindow(QMainWindow):
 
         # Docks
         self.setup_control_dock()
+        self.setup_navigator_dock()
         self.setup_tree_dock()
         self.setup_inspector_dock()
         self.setup_syslog_dock()
 
-        for dock in (self.dock_env, self.dock_tree, self.dock_inspector, self.dock_syslog):
+        for dock in (self.dock_env, self.dock_nav, self.dock_tree, self.dock_inspector, self.dock_syslog):
             dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
             self.panels_menu.addAction(dock.toggleViewAction())
 
@@ -358,6 +364,7 @@ class MainWindow(QMainWindow):
         self.rect_item.setZValue(99)
         self.scene.addItem(self.rect_item); self.rect_item.hide()
         self.pixmap_item = None
+        QTimer.singleShot(100, lambda: self.apply_layout_mode("balanced"))
 
     def setup_control_dock(self):
         d = QDockWidget("Environment", self); w = QWidget(); l = QVBoxLayout(w)
@@ -567,6 +574,52 @@ class MainWindow(QMainWindow):
         d.setWidget(self.wrap_ambient_panel(scroll)); self.addDockWidget(Qt.LeftDockWidgetArea, d)
         self.load_device_profiles()
 
+    def setup_navigator_dock(self):
+        d = QDockWidget("Navigator", self)
+        self.dock_nav = d
+        self.register_ambient_widget(d)
+
+        w = QWidget()
+        l = QVBoxLayout(w)
+
+        lbl_ws = QLabel("Workspaces")
+        lbl_ws.setObjectName("h2")
+        self.list_workspaces = QListWidget()
+        self.list_workspaces.setToolTip("Workspace navigator. Click to activate a device workspace.")
+        self.list_workspaces.itemSelectionChanged.connect(self.on_workspace_list_selected)
+
+        ws_btn_row = QHBoxLayout()
+        self.btn_nav_add_ws = QPushButton("Add Active")
+        self.btn_nav_add_ws.clicked.connect(self.add_current_workspace)
+        self.btn_nav_remove_ws = QPushButton("Remove Active")
+        self.btn_nav_remove_ws.clicked.connect(self.remove_active_workspace)
+        ws_btn_row.addWidget(self.btn_nav_add_ws)
+        ws_btn_row.addWidget(self.btn_nav_remove_ws)
+
+        lbl_sessions = QLabel("Recent Sessions")
+        lbl_sessions.setObjectName("h2")
+        self.list_sessions = QListWidget()
+        self.list_sessions.setToolTip("Recorded sessions. Click to select in Timeline.")
+        self.list_sessions.itemSelectionChanged.connect(self.on_navigator_session_selected)
+
+        sess_btn_row = QHBoxLayout()
+        self.btn_nav_refresh_sessions = QPushButton("Refresh Sessions")
+        self.btn_nav_refresh_sessions.clicked.connect(self.refresh_timeline_sessions)
+        self.btn_nav_load_session = QPushButton("Load In Timeline")
+        self.btn_nav_load_session.clicked.connect(self.load_selected_timeline_session)
+        sess_btn_row.addWidget(self.btn_nav_refresh_sessions)
+        sess_btn_row.addWidget(self.btn_nav_load_session)
+
+        l.addWidget(lbl_ws)
+        l.addWidget(self.list_workspaces)
+        l.addLayout(ws_btn_row)
+        l.addWidget(lbl_sessions)
+        l.addWidget(self.list_sessions)
+        l.addLayout(sess_btn_row)
+
+        d.setWidget(self.wrap_ambient_panel(w))
+        self.addDockWidget(Qt.LeftDockWidgetArea, d)
+
     def setup_tree_dock(self):
         d = QDockWidget("Hierarchy", self)
         self.dock_tree = d
@@ -612,6 +665,7 @@ class MainWindow(QMainWindow):
         timeline_top = QHBoxLayout()
         self.combo_timeline_session = QComboBox()
         self.combo_timeline_session.setToolTip("Recorded live sessions from the local session store.")
+        self.combo_timeline_session.currentIndexChanged.connect(self.on_timeline_session_combo_changed)
         self.btn_timeline_refresh = QPushButton("Refresh")
         self.btn_timeline_refresh.clicked.connect(self.refresh_timeline_sessions)
         self.btn_timeline_load = QPushButton("Load")
@@ -658,6 +712,47 @@ class MainWindow(QMainWindow):
         self.txt_sys.setToolTip("Internal app events, status updates, and diagnostics.")
         self.txt_sys.verticalScrollBar().valueChanged.connect(self.on_syslog_scroll)
         d.setWidget(self.wrap_ambient_panel(self.txt_sys)); self.addDockWidget(Qt.BottomDockWidgetArea, d)
+
+    def _set_inspector_tab(self, name: str) -> None:
+        dock_widget = self.dock_inspector.widget()
+        if not isinstance(dock_widget, QWidget):
+            return
+        tab = dock_widget.findChild(QTabWidget)
+        if not tab:
+            return
+        for i in range(tab.count()):
+            if tab.tabText(i).lower() == name.lower():
+                tab.setCurrentIndex(i)
+                break
+
+    def apply_layout_mode(self, mode: str) -> None:
+        # Panel choreography: deterministic workspace layouts for different tasks.
+        if not hasattr(self, "dock_nav"):
+            return
+        mode = (mode or "").strip().lower()
+        if mode not in {"balanced", "live", "timeline", "inspector"}:
+            mode = "balanced"
+
+        for dock in (self.dock_env, self.dock_nav, self.dock_tree, self.dock_inspector, self.dock_syslog):
+            dock.show()
+
+        if mode == "live":
+            self._set_inspector_tab("Logcat")
+            self.resizeDocks([self.dock_env, self.dock_nav, self.dock_tree], [310, 280, 420], Qt.Horizontal)
+            self.resizeDocks([self.dock_inspector, self.dock_syslog], [360, 220], Qt.Vertical)
+        elif mode == "timeline":
+            self._set_inspector_tab("Timeline")
+            self.resizeDocks([self.dock_env, self.dock_nav, self.dock_tree], [260, 300, 330], Qt.Horizontal)
+            self.resizeDocks([self.dock_inspector, self.dock_syslog], [500, 170], Qt.Vertical)
+        elif mode == "inspector":
+            self._set_inspector_tab("Node Details")
+            self.resizeDocks([self.dock_env, self.dock_nav, self.dock_tree], [230, 230, 480], Qt.Horizontal)
+            self.resizeDocks([self.dock_inspector, self.dock_syslog], [520, 140], Qt.Vertical)
+        else:
+            self._set_inspector_tab("Node Details")
+            self.resizeDocks([self.dock_env, self.dock_nav, self.dock_tree], [280, 260, 380], Qt.Horizontal)
+            self.resizeDocks([self.dock_inspector, self.dock_syslog], [420, 190], Qt.Vertical)
+        self.log_sys(f"Layout mode applied: {mode}")
 
     # --- Core Logic ---
 
@@ -1006,12 +1101,47 @@ class MainWindow(QMainWindow):
             idx = self.workspace_serials.index(current)
             self.tabs_workspace.setCurrentIndex(idx)
         self.tabs_workspace.blockSignals(False)
+        self._refresh_workspace_list()
+
+    def _refresh_workspace_list(self) -> None:
+        if not hasattr(self, "list_workspaces"):
+            return
+        current = self.active_workspace_serial
+        self.list_workspaces.blockSignals(True)
+        self.list_workspaces.clear()
+        for serial in self.workspace_serials:
+            ws = self.workspaces.get(serial)
+            if not ws:
+                continue
+            self.list_workspaces.addItem(self._workspace_label(ws))
+        if current and current in self.workspace_serials:
+            idx = self.workspace_serials.index(current)
+            self.list_workspaces.setCurrentRow(idx)
+        self.list_workspaces.blockSignals(False)
 
     def on_workspace_tab_changed(self, idx: int) -> None:
         if idx < 0 or idx >= len(self.workspace_serials):
             return
         serial = self.workspace_serials[idx]
         self.set_active_workspace(serial)
+
+    def on_workspace_list_selected(self) -> None:
+        if not hasattr(self, "list_workspaces"):
+            return
+        idx = self.list_workspaces.currentRow()
+        if idx < 0 or idx >= len(self.workspace_serials):
+            return
+        serial = self.workspace_serials[idx]
+        self.set_active_workspace(serial)
+
+    def on_navigator_session_selected(self) -> None:
+        if not hasattr(self, "list_sessions") or not hasattr(self, "combo_timeline_session"):
+            return
+        idx = self.list_sessions.currentRow()
+        if idx < 0:
+            return
+        if idx < self.combo_timeline_session.count():
+            self.combo_timeline_session.setCurrentIndex(idx)
 
     def add_current_workspace(self) -> None:
         idx = self.combo_dev.currentIndex()
@@ -2030,6 +2160,9 @@ class MainWindow(QMainWindow):
 
         self.combo_timeline_session.blockSignals(True)
         self.combo_timeline_session.clear()
+        if hasattr(self, "list_sessions"):
+            self.list_sessions.blockSignals(True)
+            self.list_sessions.clear()
         for session_dir in sessions:
             label = session_dir.name
             meta_path = session_dir / "meta.json"
@@ -2040,7 +2173,13 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             self.combo_timeline_session.addItem(label, str(session_dir))
+            if hasattr(self, "list_sessions"):
+                self.list_sessions.addItem(label)
         self.combo_timeline_session.blockSignals(False)
+        if hasattr(self, "list_sessions"):
+            if sessions:
+                self.list_sessions.setCurrentRow(0)
+            self.list_sessions.blockSignals(False)
         if sessions:
             self.load_selected_timeline_session()
         else:
@@ -2058,6 +2197,15 @@ class MainWindow(QMainWindow):
         if not path.exists():
             return None
         return path
+
+    def on_timeline_session_combo_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        if hasattr(self, "list_sessions"):
+            self.list_sessions.blockSignals(True)
+            if idx < self.list_sessions.count():
+                self.list_sessions.setCurrentRow(idx)
+            self.list_sessions.blockSignals(False)
 
     def load_selected_timeline_session(self) -> None:
         session_dir = self._selected_timeline_dir()
