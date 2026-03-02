@@ -6,7 +6,10 @@
       "type": "python",
       "request": "launch",
       "module": "qa_snapshot_tool.main",
-      "cwd": "${workspaceFolder}"
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}\\src"
+      }
     }
   ]
 }

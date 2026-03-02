@@ -6,21 +6,45 @@ and launches the main window. It serves as the bootstrap for the desktop GUI.
 """
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 os.environ["QT_LOGGING_RULES"] = "qt.multimedia.*=false;qt.multimedia.ffmpeg.*=false"
 
-from PySide6.QtGui import QFont, QFontDatabase, QIcon
-from PySide6.QtCore import QLoggingCategory
-from PySide6.QtWidgets import QApplication
-
-if __name__ == "__main__" and __package__ is None:
+if __name__ == "__main__" and not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from qa_snapshot_tool.gui import MainWindow
-from qa_snapshot_tool.theme import Theme
-from qa_snapshot_tool.utils import get_app_root
+def _maybe_relaunch_with_project_venv() -> bool:
+    """
+    Relaunches this script once using local .venv when dependencies are missing.
+    """
+    if os.environ.get("QA_SNAPSHOT_RELAUNCH") == "1":
+        return False
+
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = (
+        repo_root / ".venv" / "Scripts" / "python.exe",
+        repo_root / ".venv" / "bin" / "python",
+    )
+    venv_python = next((p for p in candidates if p.exists()), None)
+    if not venv_python:
+        return False
+
+    try:
+        if Path(sys.executable).resolve() == venv_python.resolve():
+            return False
+    except Exception:
+        pass
+
+    env = os.environ.copy()
+    env["QA_SNAPSHOT_RELAUNCH"] = "1"
+    args = [str(venv_python), str(Path(__file__).resolve()), *sys.argv[1:]]
+    try:
+        subprocess.Popen(args, cwd=str(repo_root), env=env)
+    except Exception:
+        return False
+    return True
 
 def main() -> None:
     """
@@ -28,6 +52,18 @@ def main() -> None:
     Initializes the Qt Application context and event loop.
     """
     try:
+        try:
+            from PySide6.QtGui import QFont, QFontDatabase, QIcon
+            from PySide6.QtCore import QLoggingCategory
+            from PySide6.QtWidgets import QApplication
+            from qa_snapshot_tool.gui import MainWindow
+            from qa_snapshot_tool.theme import Theme
+            from qa_snapshot_tool.utils import get_app_root
+        except (ImportError, ModuleNotFoundError):
+            if _maybe_relaunch_with_project_venv():
+                return
+            raise
+
         QLoggingCategory.setFilterRules("qt.multimedia.*=false\\nqt.multimedia.ffmpeg.*=false")
         app = QApplication(sys.argv)
         app.setApplicationName("QUANTUM Inspector")
