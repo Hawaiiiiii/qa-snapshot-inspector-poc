@@ -17,4 +17,4 @@ jobs:
       - name: Unit tests
         run: python -m pytest -q
       - name: Syntax check
-        run: python -m compileall src/qa_snapshot_tool
+        run: python -m compileall src/qa_snapshot_tool src/qa_snapshot_native scripts
