@@ -10,7 +10,6 @@ Provides background threads for real-time device interaction:
 
 from PySide6.QtCore import QThread, Signal, QObject
 from PySide6.QtGui import QImage
-from PySide6.QtGui import QGuiApplication
 import hashlib
 import os
 import time
@@ -475,10 +474,7 @@ class ScrcpyVideoSource(QObject):
                     except Exception:
                         pass
             except Exception as exc:
-                now = time.time()
-                if (now - self._last_error_ts) > 5.0:
-                    self._last_error_ts = now
-                    self.dump_error.emit(f"UI dump error: {type(exc).__name__}")
+                self.log_line.emit(f"scrcpy stop failed: {type(exc).__name__}")
             self._proc = None
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)

@@ -120,8 +120,8 @@ Missing files are handled gracefully with warnings.
 1) Create a virtual environment:
 
 ```bash
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv
+.venv\Scripts\activate
 ```
 
 2) Install dependencies:
@@ -135,7 +135,7 @@ pip install -r requirements.txt
 Run the tool:
 
 ```bash
-python src/qa_snapshot_tool/main.py
+.venv\Scripts\python.exe src/qa_snapshot_tool/main.py
 ```
 
 ## Notes
