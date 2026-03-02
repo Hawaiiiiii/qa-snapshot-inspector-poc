@@ -116,3 +116,20 @@ def test_recorder_prunes_oldest_sessions_deterministically(tmp_path: Path):
     assert not old_a.exists()
     assert old_b.exists()
     assert recorder.session_dir.exists()
+
+
+def test_start_session_sanitizes_serial_for_windows_paths(tmp_path: Path):
+    recorder = SessionRecorder.start_session(
+        session_root=tmp_path / "sessions",
+        serial="rack:with?invalid*chars",
+        model="RackModel",
+        environment_type="rack",
+        profile="rack_aaos",
+        display_id="0",
+        session_max_bytes=1024 * 1024 * 1024,
+    )
+    recorder.finish_session("stopped")
+
+    assert "?" not in recorder.session_dir.name
+    assert "*" not in recorder.session_dir.name
+    assert ":" not in recorder.session_dir.name

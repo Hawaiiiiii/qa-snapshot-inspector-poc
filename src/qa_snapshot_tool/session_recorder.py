@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import sqlite3
 import threading
@@ -55,6 +56,13 @@ class SessionRecorderRegistry:
 
 
 class SessionRecorder:
+    @staticmethod
+    def _safe_token(value: str) -> str:
+        token = (value or "").strip()
+        token = re.sub(r"[<>:\"/\\|?*\x00-\x1F]", "_", token)
+        token = re.sub(r"_+", "_", token).strip(" ._")
+        return token or "unknown"
+
     def __init__(
         self,
         root: Path,
@@ -112,7 +120,7 @@ class SessionRecorder:
         session_max_bytes: int,
     ) -> "SessionRecorder":
         session_root.mkdir(parents=True, exist_ok=True)
-        session_id = time.strftime("%Y%m%d_%H%M%S") + f"_{serial.replace(':', '_')}"
+        session_id = time.strftime("%Y%m%d_%H%M%S") + f"_{cls._safe_token(serial)}"
         context = SessionContext(
             session_id=session_id,
             serial=serial,
