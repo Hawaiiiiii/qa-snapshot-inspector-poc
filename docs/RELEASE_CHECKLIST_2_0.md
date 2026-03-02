@@ -14,7 +14,7 @@ Use this checklist before publishing installer assets to GitHub Releases.
 Run:
 
 ```powershell
-.\scripts\release_gate.ps1 -RequirePython311
+.\scripts\release_gate.ps1
 ```
 
 Expected:
@@ -25,13 +25,20 @@ Expected:
 Optional strict performance check (requires recorded session):
 
 ```powershell
-.\scripts\release_gate.ps1 -Strict -RequirePython311
+.\scripts\release_gate.ps1 -Strict
 ```
 
 Optional executable build:
 
 ```powershell
-.\scripts\release_gate.ps1 -BuildExe -RequirePython311
+.\scripts\release_gate.ps1 -BuildExe
+```
+
+Optional deterministic packaging baseline (exact Python 3.11):
+
+```powershell
+.\scripts\release_gate.ps1 -RequirePackagingBaseline311
+.\scripts\release_gate.ps1 -BuildExe -RequirePackagingBaseline311
 ```
 
 Performance A/B capture helpers:
@@ -49,7 +56,10 @@ Notes:
 ## 3) CI gates
 
 - [ ] CI workflow (`.github/workflows/ci.yml`) passes.
-- [ ] Release build workflow (`.github/workflows/release-build.yml`) passes on Windows Python 3.11.
+- [ ] CI validates tests/compile on Python 3.11 and 3.14.
+- [ ] Release build workflow (`.github/workflows/release-build.yml`) passes:
+  - [ ] cross-version validation job (3.11 + 3.14)
+  - [ ] Windows packaging job on Python 3.11
 - [ ] Artifact `QuantumInspector-windows-exe` is produced.
 
 ## 4) Functional acceptance (manual)

@@ -7,7 +7,32 @@ on:
   workflow_dispatch:
 
 jobs:
+  validate-cross-version:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+      - name: Syntax check
+        run: python -m compileall src/qa_snapshot_tool src/qa_snapshot_native scripts
+
   build-windows:
+    needs: validate-cross-version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
