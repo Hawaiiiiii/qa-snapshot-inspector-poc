@@ -4,6 +4,16 @@
 
 - Ongoing PoC improvements
 
+## [2.0.0-rc2] - 2026-03-02
+
+- Finalized `quantum_handoff.v1` contract with full session/device/display/artifact metadata and deterministic export paths.
+- Enforced capability-driven runtime gating across live start, snapshot capture, input injection, display switching, and UI tree refresh.
+- Extended multi-device scheduler policy to throttle background XML/focus/log pipelines in addition to video FPS.
+- Added adaptive event-triggered recorder captures for tap, swipe, focus, dump-error, and display-change transitions.
+- Added performance acceptance profiles and enforcement flags to hotspot profiling (`--targets`, `--enforce-targets`).
+- Added focused runtime tests for recorder reliability/pruning/crash handling, capability behavior, scheduler bounds, and workspace isolation.
+- Normalized runtime docs to `.venv\\Scripts\\python.exe` command usage and documented QUANTUM 2.0 runtime model.
+
 ## [2.0.0-rc1] - 2026-03-02
 
 - Added multi-device tabbed workspaces (up to 3 concurrent sessions).
