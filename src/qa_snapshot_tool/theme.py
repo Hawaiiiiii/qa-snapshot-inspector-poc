@@ -20,9 +20,9 @@ class Theme:
     BMW_BLUE_HIGHLIGHT: str = "#2d7dec"
     BMW_BLUE_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0f4aa0, stop:0.55 #1c69d4, stop:1 #2d7dec)"
 
-    PARADOX_PINK: str = "#ff2d95"
-    PARADOX_PURPLE: str = "#7a2cff"
-    PARADOX_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff2d95, stop:0.55 #b030ff, stop:1 #7a2cff)"
+    ACCENT_CYAN: str = "#2bb7d6"
+    ACCENT_STEEL: str = "#7f8a99"
+    BMW_ALT_GRADIENT: str = "qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #204561, stop:0.55 #2b6a92, stop:1 #3d89b8)"
     
     BG_DARK: str = "#101317"
     BG_PANEL: str = "#161a20"
@@ -53,7 +53,7 @@ class Theme:
         elevated_bg = "rgba(31, 37, 48, 210)" if use_translucent else Theme.BG_ELEVATED
         return f"""
         QMainWindow {{
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b0f14, stop:0.6 #121722, stop:1 #10131a);
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #090d13, stop:0.58 #111a27, stop:1 #0f161f);
             {ambient_overlay}
         }}
         
@@ -148,8 +148,8 @@ class Theme:
             background: {Theme.BMW_BLUE_HIGHLIGHT};
         }}
         QPushButton[class="accent"] {{
-            background: {Theme.PARADOX_GRADIENT};
-            border: 1px solid #6a1fd4;
+            background: {Theme.BMW_ALT_GRADIENT};
+            border: 1px solid #2a5f86;
             font-weight: 600;
         }}
         

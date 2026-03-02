@@ -49,6 +49,9 @@ V1 PoC (current build).
 | Snapshot | Re-capture last snapshot (one-click refresh) |
 | Devices | IP connect + recent device history + devices.json profiles |
 | Diagnostics | Corrupted snapshot detection (zero nodes/invalid bounds) |
+| Sessions | Continuous live recorder + timeline browser + crash markers |
+| Workspaces | Concurrent tabbed device workspaces (up to 3) |
+| Maestro | Evidence handoff export (`quantum_handoff.json`) |
 
 > [!TIP]
 > Use Offline mode to inspect snapshots without a connected device.
@@ -142,6 +145,14 @@ Run the tool:
 
 - Offline mode: Open any snapshot folder with a dump and screenshot.
 - Online mode (optional): Connect a device and capture snapshots via ADB or scrcpy.
+
+## Hotspot Profiling
+
+Run local hotspot profiling against your latest recorded session:
+
+```bash
+.venv\Scripts\python.exe scripts\profile_hotspots.py
+```
 
 ## Live mirroring backend (scrcpy)
 
