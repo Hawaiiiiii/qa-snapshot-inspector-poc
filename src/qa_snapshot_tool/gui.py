@@ -41,7 +41,7 @@ from qa_snapshot_tool.adb_manager import AdbManager
 from qa_snapshot_tool.live_mirror import VideoThread, ScrcpyVideoSource, HierarchyThread, LogcatThread, FocusMonitorThread
 from qa_snapshot_tool.theme import Theme
 from qa_snapshot_tool.settings import AppSettings
-from qa_snapshot_tool.device_profiles import detect_capabilities
+from qa_snapshot_tool.device_profiles import DeviceCapabilities, detect_capabilities
 from qa_snapshot_tool.session_recorder import SessionRecorder
 from qa_snapshot_tool.maestro_handoff import export_session_handoff
 from qa_snapshot_tool.perf_metrics import PerfTracker
@@ -52,6 +52,7 @@ from qa_snapshot_native import backend_name as native_backend_name, smallest_hit
 class DeviceWorkspace:
     serial: str
     model: str = "Unknown"
+    capabilities: Optional[DeviceCapabilities] = None
     selected_display_id: Optional[str] = None
     video_thread: Optional[Any] = None
     xml_thread: Optional[HierarchyThread] = None
@@ -364,10 +365,11 @@ class MainWindow(QMainWindow):
         self.rect_item.setZValue(99)
         self.scene.addItem(self.rect_item); self.rect_item.hide()
         self.pixmap_item = None
+        self._apply_capability_state()
         QTimer.singleShot(100, lambda: self.apply_layout_mode("balanced"))
 
     def setup_control_dock(self):
-        d = QDockWidget("Environment", self); w = QWidget(); l = QVBoxLayout(w)
+        d = QDockWidget("Live Inspector Workspace", self); w = QWidget(); l = QVBoxLayout(w)
         self.dock_env = d
         self.register_ambient_widget(d)
         
@@ -514,11 +516,11 @@ class MainWindow(QMainWindow):
         gb_actions.setLayout(al); l.addWidget(gb_actions)
         
         # Snapshots
-        gb_snap = QGroupBox("Snapshot / Offline"); sl = QVBoxLayout()
-        btn_cap = QPushButton("Capture Snapshot"); btn_cap.setProperty("class", "primary"); btn_cap.clicked.connect(self.capture_snapshot)
-        btn_cap.setToolTip("Capture screenshot, UI dump, and logcat into a snapshot folder.")
-        btn_load = QPushButton("Load Offline Dump..."); btn_load.setProperty("class", "accent"); btn_load.clicked.connect(self.load_snapshot_dialog)
-        btn_load.setToolTip("Load an offline dump (dump.uix) from a snapshot folder.")
+        gb_snap = QGroupBox("Export / Integration Surface"); sl = QVBoxLayout()
+        self.btn_capture = QPushButton("Capture Snapshot"); self.btn_capture.setProperty("class", "primary"); self.btn_capture.clicked.connect(self.capture_snapshot)
+        self.btn_capture.setToolTip("Capture screenshot, UI dump, and logcat into a snapshot folder.")
+        self.btn_load_snapshot = QPushButton("Load Offline Dump..."); self.btn_load_snapshot.setProperty("class", "accent"); self.btn_load_snapshot.clicked.connect(self.load_snapshot_dialog)
+        self.btn_load_snapshot.setToolTip("Load an offline dump (dump.uix) from a snapshot folder.")
         self.btn_recapture = QPushButton("Re-Capture Last"); self.btn_recapture.clicked.connect(self.recapture_last_snapshot)
         self.btn_recapture.setToolTip("Re-capture the last loaded snapshot using the active device.")
         self.btn_recapture.setEnabled(False)
@@ -542,7 +544,7 @@ class MainWindow(QMainWindow):
         self.btn_open_maestro_flows = QPushButton("Open Maestro Flows")
         self.btn_open_maestro_flows.clicked.connect(self.open_maestro_flows)
 
-        sl.addWidget(btn_cap); sl.addWidget(btn_load); sl.addWidget(self.btn_recapture)
+        sl.addWidget(self.btn_capture); sl.addWidget(self.btn_load_snapshot); sl.addWidget(self.btn_recapture)
         sl.addLayout(maestro_row)
         sl.addWidget(self.btn_export_handoff)
         sl.addWidget(self.btn_open_handoff)
@@ -575,7 +577,7 @@ class MainWindow(QMainWindow):
         self.load_device_profiles()
 
     def setup_navigator_dock(self):
-        d = QDockWidget("Navigator", self)
+        d = QDockWidget("Device/Session Navigator", self)
         self.dock_nav = d
         self.register_ambient_widget(d)
 
@@ -631,7 +633,7 @@ class MainWindow(QMainWindow):
         d.setWidget(self.wrap_ambient_panel(self.tree)); self.addDockWidget(Qt.RightDockWidgetArea, d)
 
     def setup_inspector_dock(self):
-        d = QDockWidget("Inspector", self); tabs = QTabWidget()
+        d = QDockWidget("Timeline/Evidence Browser", self); tabs = QTabWidget()
         self.dock_inspector = d
         self.register_ambient_widget(d)
 
@@ -1067,6 +1069,97 @@ class MainWindow(QMainWindow):
             return None
         return self.workspaces.get(self.active_workspace_serial)
 
+    def _refresh_workspace_capabilities(self, ws: DeviceWorkspace) -> DeviceCapabilities:
+        caps = detect_capabilities(ws.serial, emulator_beta_enabled=self.settings.emulator_beta_enabled)
+        ws.capabilities = caps
+        ws.environment_type = caps.environment_type
+        ws.profile = caps.profile
+        return caps
+
+    def _workspace_caps(self, ws: Optional[DeviceWorkspace]) -> Optional[DeviceCapabilities]:
+        if not ws:
+            return None
+        if ws.capabilities is None:
+            return self._refresh_workspace_capabilities(ws)
+        return ws.capabilities
+
+    def _capability_block_reason(self, caps: DeviceCapabilities, capability_name: str, action: str) -> str:
+        if caps.environment_type == "emulator" and not self.settings.emulator_beta_enabled:
+            return f"{action} blocked: emulator profile '{caps.profile}' requires 'Enable emulator beta support'."
+        return (
+            f"{action} blocked by capabilities for profile '{caps.profile}' "
+            f"({caps.environment_type}): {capability_name}=false."
+        )
+
+    def _require_capability(
+        self,
+        ws: Optional[DeviceWorkspace],
+        capability_name: str,
+        action: str,
+        quiet: bool = False,
+    ) -> bool:
+        caps = self._workspace_caps(ws)
+        if not caps:
+            if not quiet:
+                self.log_sys(f"{action} blocked: no active workspace.")
+            return False
+        if bool(getattr(caps, capability_name, False)):
+            return True
+        if not quiet:
+            self.log_sys(self._capability_block_reason(caps, capability_name, action))
+        return False
+
+    def _set_live_source_capability_state(self, caps: DeviceCapabilities) -> None:
+        if not hasattr(self, "combo_live_source"):
+            return
+        model = self.combo_live_source.model()
+        if not model:
+            return
+        for i in range(self.combo_live_source.count()):
+            text = self.combo_live_source.itemText(i)
+            enabled = True
+            if "Scrcpy" in text:
+                enabled = caps.supports_scrcpy
+            if "ADB" in text:
+                enabled = caps.supports_screencap
+            item = model.item(i)
+            if item is not None:
+                item.setEnabled(enabled)
+        if "Scrcpy" in self.combo_live_source.currentText() and not caps.supports_scrcpy:
+            idx = self.combo_live_source.findText("ADB (compat)")
+            if idx != -1:
+                self.combo_live_source.setCurrentIndex(idx)
+
+    def _apply_capability_state(self) -> None:
+        ws = self._active_workspace()
+        caps = self._workspace_caps(ws)
+        if not ws or not caps:
+            if hasattr(self, "btn_live"):
+                self.btn_live.setEnabled(False)
+            if hasattr(self, "btn_capture"):
+                self.btn_capture.setEnabled(False)
+            if hasattr(self, "btn_recapture"):
+                self.btn_recapture.setEnabled(False)
+            if hasattr(self, "combo_display"):
+                self.combo_display.setEnabled(False)
+            return
+
+        can_live = caps.supports_screencap
+        can_snapshot = caps.supports_screencap and caps.supports_uia_dump
+        can_display_switch = caps.supports_multi_display
+        can_input = caps.supports_input
+
+        self.btn_live.setEnabled(can_live)
+        if hasattr(self, "btn_capture"):
+            self.btn_capture.setEnabled(can_snapshot)
+        if hasattr(self, "btn_recapture"):
+            self.btn_recapture.setEnabled(bool(ws.last_snapshot_path) and can_snapshot)
+        if hasattr(self, "combo_display"):
+            self.combo_display.setEnabled(can_display_switch)
+        if hasattr(self, "view"):
+            self.view.control_enabled = bool(ws.video_thread and can_input)
+        self._set_live_source_capability_state(caps)
+
     def ensure_workspace(self, serial: str, model: str = "Unknown") -> Optional[DeviceWorkspace]:
         serial = (serial or "").strip()
         if not serial:
@@ -1075,11 +1168,13 @@ class MainWindow(QMainWindow):
             ws = self.workspaces[serial]
             if model and model != "Unknown":
                 ws.model = model
+            self._refresh_workspace_capabilities(ws)
             return ws
         if len(self.workspaces) >= self.settings.max_concurrent_devices:
             self.log_sys(f"Workspace limit reached ({self.settings.max_concurrent_devices}). Remove one before adding another.")
             return None
         ws = DeviceWorkspace(serial=serial, model=model or "Unknown")
+        self._refresh_workspace_capabilities(ws)
         self.workspaces[serial] = ws
         self.workspace_serials.append(serial)
         self._refresh_workspace_tabs()
@@ -1174,6 +1269,7 @@ class MainWindow(QMainWindow):
             self.polish_btn(self.btn_live)
             self.txt_log.setText("")
             self.lbl_focus.setText("Focus: -")
+            self._apply_capability_state()
             self.log_sys(f"Workspace removed: {serial}")
 
     def set_active_workspace(self, serial: str) -> None:
@@ -1185,6 +1281,7 @@ class MainWindow(QMainWindow):
 
         self.active_workspace_serial = serial
         ws = self.workspaces[serial]
+        self._refresh_workspace_capabilities(ws)
         self.active_device = serial
         self.selected_display_id = ws.selected_display_id
         AdbManager.set_preferred_display_id(serial, ws.selected_display_id)
@@ -1204,6 +1301,7 @@ class MainWindow(QMainWindow):
         self._load_workspace_view_state(ws)
         self.update_display_combo()
         self._apply_background_scheduler()
+        self._apply_capability_state()
         self._refresh_workspace_tabs()
 
     def _bind_active_workspace_threads(self) -> None:
@@ -1216,6 +1314,7 @@ class MainWindow(QMainWindow):
         self.btn_live.setText("STOP LIVE" if live else "START LIVE STREAM")
         self.btn_live.setProperty("class", "danger" if live else "primary")
         self.polish_btn(self.btn_live)
+        self._apply_capability_state()
 
     def _store_workspace_view_state(self, ws: DeviceWorkspace) -> None:
         ws.last_frame_image = self.last_frame_image.copy() if self.last_frame_image and not self.last_frame_image.isNull() else ws.last_frame_image
@@ -1256,16 +1355,28 @@ class MainWindow(QMainWindow):
     def _apply_background_scheduler(self) -> None:
         active_serial = self.active_workspace_serial
         for serial, ws in self.workspaces.items():
-            if not ws.video_thread or not hasattr(ws.video_thread, "set_target_fps"):
-                continue
             active = serial == active_serial
-            if isinstance(ws.video_thread, ScrcpyVideoSource):
-                target = 20 if self.perf_mode else 30
-                bg = 8
-            else:
-                target = 4 if self.perf_mode else 8
-                bg = 2
-            ws.video_thread.set_target_fps(target if active else bg)
+            if ws.video_thread and hasattr(ws.video_thread, "set_target_fps"):
+                if isinstance(ws.video_thread, ScrcpyVideoSource):
+                    target = 20 if self.perf_mode else 30
+                    bg = 8
+                else:
+                    target = 4 if self.perf_mode else 8
+                    bg = 2
+                ws.video_thread.set_target_fps(target if active else bg)
+
+            if ws.xml_thread and hasattr(ws.xml_thread, "set_poll_interval"):
+                xml_active = 1.2 if self.perf_mode else 0.8
+                xml_bg = 3.5 if self.perf_mode else 2.4
+                ws.xml_thread.set_poll_interval(xml_active if active else xml_bg)
+
+            if ws.focus_thread and hasattr(ws.focus_thread, "set_poll_interval"):
+                focus_active = 1.0
+                focus_bg = 3.5 if self.perf_mode else 2.5
+                ws.focus_thread.set_poll_interval(focus_active if active else focus_bg)
+
+            if ws.log_thread and hasattr(ws.log_thread, "set_emit_every_n"):
+                ws.log_thread.set_emit_every_n(1 if active else (4 if self.perf_mode else 3))
 
     def refresh_devices(self):
         self.combo_dev.blockSignals(True); self.combo_dev.clear()
@@ -1281,7 +1392,9 @@ class MainWindow(QMainWindow):
             AdbManager.record_device(d['serial'], d['model'])
             if d.get("state") == "device":
                 if d["serial"] in self.workspaces:
-                    self.workspaces[d["serial"]].model = d.get("model", "Unknown")
+                    ws = self.workspaces[d["serial"]]
+                    ws.model = d.get("model", "Unknown")
+                    self._refresh_workspace_capabilities(ws)
         self.combo_dev.blockSignals(False)
         if devs:
             online_idx = next((i for i, d in enumerate(devs) if d.get("state") == "device"), None)
@@ -1289,6 +1402,7 @@ class MainWindow(QMainWindow):
                 self.on_dev_change(online_idx)
         self._refresh_workspace_tabs()
         self.update_history_combo()
+        self._apply_capability_state()
         self.log_sys(f"Devices refreshed: {len(devs)} found")
 
     def on_dev_change(self, idx):
@@ -1318,6 +1432,7 @@ class MainWindow(QMainWindow):
             self.log_sys(f"Live mirror stopped on {ws.serial}")
             self._bind_active_workspace_threads()
             self._apply_background_scheduler()
+            self._apply_capability_state()
             self._refresh_workspace_tabs()
             return
 
@@ -1326,17 +1441,16 @@ class MainWindow(QMainWindow):
             self.log_sys("Live mirror requested but no device is selected")
             return
 
-        caps = detect_capabilities(serial, emulator_beta_enabled=self.settings.emulator_beta_enabled)
-        ws.environment_type = caps.environment_type
-        ws.profile = caps.profile
-        if caps.environment_type == "emulator" and not self.settings.emulator_beta_enabled:
-            self.log_sys("Emulator detected. Enable 'emulator beta support' to start live capture on emulator targets.")
+        caps = self._refresh_workspace_capabilities(ws)
+        if not self._require_capability(ws, "supports_screencap", "Live start"):
             return
 
         self.txt_log.setText("Starting logcat...")
         target_fps = 4 if self.perf_mode else 8
         source_text = self.combo_live_source.currentText() if hasattr(self, "combo_live_source") else "Scrcpy (fast)"
         if "Scrcpy" in source_text:
+            if not self._require_capability(ws, "supports_scrcpy", "Live start (scrcpy)"):
+                return
             self.scrcpy_path = self.resolve_scrcpy_path()
             if not self.scrcpy_path:
                 QMessageBox.warning(
@@ -1371,10 +1485,17 @@ class MainWindow(QMainWindow):
         ws.video_thread.frame_ready.connect(lambda data, s=serial: self.on_workspace_frame(s, data))
         ws.video_thread.start_stream()
 
-        ws.xml_thread = HierarchyThread(serial)
-        ws.xml_thread.tree_ready.connect(lambda xml, changed, s=serial: self.on_workspace_tree(s, xml, changed))
-        ws.xml_thread.dump_error.connect(lambda msg, s=serial: self.on_workspace_dump_error(s, msg))
-        ws.xml_thread.start()
+        if caps.supports_uia_dump:
+            ws.xml_thread = HierarchyThread(serial)
+            ws.xml_thread.tree_ready.connect(lambda xml, changed, s=serial: self.on_workspace_tree(s, xml, changed))
+            ws.xml_thread.dump_error.connect(lambda msg, s=serial: self.on_workspace_dump_error(s, msg))
+            ws.xml_thread.start()
+        else:
+            ws.xml_thread = None
+            self.set_tree_status("Unavailable", "#e06b6b")
+            self.log_sys(
+                self._capability_block_reason(caps, "supports_uia_dump", "Live hierarchy polling")
+            )
 
         ws.log_thread = LogcatThread(serial)
         ws.log_thread.log_line.connect(lambda line, s=serial: self.on_workspace_log_line(s, line, source="logcat"))
@@ -1403,10 +1524,11 @@ class MainWindow(QMainWindow):
             ws.recorder.record_event("live_started", {"source": source_text})
             self.log_sys(f"Session recorder started: {ws.recorder.session_dir}")
 
-        self.view.control_enabled = True
+        self.view.control_enabled = bool(caps.supports_input)
         self.log_sys(f"Live mirror started on {serial}")
         self._bind_active_workspace_threads()
         self._apply_background_scheduler()
+        self._apply_capability_state()
         self._refresh_workspace_tabs()
         self.log_device_info()
 
@@ -1430,6 +1552,7 @@ class MainWindow(QMainWindow):
             self.refresh_timeline_sessions()
         if ws.serial == self.active_workspace_serial:
             self.view.control_enabled = False
+        self._apply_capability_state()
 
     def polish_btn(self, btn): btn.style().unpolish(btn); btn.style().polish(btn)
 
@@ -1481,20 +1604,37 @@ class MainWindow(QMainWindow):
         if serial == self.active_workspace_serial:
             self.txt_log.append(line)
 
+    def _record_event_capture(
+        self,
+        ws: DeviceWorkspace,
+        event_kind: str,
+        payload: Optional[Dict[str, Any]] = None,
+        include_xml: bool = False,
+    ) -> None:
+        if not ws.recorder:
+            return
+        ws.recorder.record_event(event_kind, payload or {})
+        frame = ws.last_frame_image
+        if frame is None and ws.serial == self.active_workspace_serial:
+            frame = self.last_frame_image
+        if frame is not None and not frame.isNull():
+            ws.recorder.record_frame(frame, reason=f"event_{event_kind}")
+        if include_xml and ws.last_xml:
+            ws.recorder.record_xml_dump(ws.last_xml, reason=f"event_{event_kind}")
+
     def on_workspace_focus(self, serial: str, focus: str) -> None:
         ws = self.workspaces.get(serial)
         if not ws:
             return
         ws.focus_text = focus
-        if ws.recorder:
-            ws.recorder.record_event("focus_changed", {"focus": focus})
+        self._record_event_capture(ws, "focus_changed", {"focus": focus})
         if serial == self.active_workspace_serial:
             self.on_focus_changed(focus)
 
     def on_workspace_dump_error(self, serial: str, msg: str) -> None:
         ws = self.workspaces.get(serial)
-        if ws and ws.recorder:
-            ws.recorder.record_event("dump_error", {"message": msg})
+        if ws:
+            self._record_event_capture(ws, "dump_error", {"message": msg}, include_xml=True)
         if serial == self.active_workspace_serial:
             self.on_dump_error(msg)
 
@@ -1583,34 +1723,38 @@ class MainWindow(QMainWindow):
     def update_display_combo(self) -> None:
         if not hasattr(self, "combo_display"):
             return
+        ws = self._active_workspace()
+        caps = self._workspace_caps(ws)
         self.combo_display.blockSignals(True)
         self.combo_display.clear()
         self.combo_display.addItem("Auto (best)", None)
         if not self.active_device:
+            self.combo_display.setEnabled(False)
             self.combo_display.blockSignals(False)
             return
 
-        details = AdbManager.get_display_details(self.active_device)
-        display_ids = AdbManager.get_display_ids(self.active_device)
-        if details:
-            for item in details:
-                disp_id = item.get("id")
-                label = f"Display {disp_id}"
-                extra = item.get("label") or ""
-                size_match = re.search(r"(\d+) x (\d+)", extra)
-                if size_match:
-                    label += f" ({size_match.group(1)}x{size_match.group(2)})"
-                elif extra:
-                    label += f" - {extra}"
-                self.combo_display.addItem(label, disp_id)
-        else:
-            for disp_id in display_ids:
-                self.combo_display.addItem(f"Display {disp_id}", disp_id)
+        display_ids: List[str] = []
+        if caps and caps.supports_multi_display:
+            details = AdbManager.get_display_details(self.active_device)
+            display_ids = AdbManager.get_display_ids(self.active_device)
+            if details:
+                for item in details:
+                    disp_id = item.get("id")
+                    label = f"Display {disp_id}"
+                    extra = item.get("label") or ""
+                    size_match = re.search(r"(\d+) x (\d+)", extra)
+                    if size_match:
+                        label += f" ({size_match.group(1)}x{size_match.group(2)})"
+                    elif extra:
+                        label += f" - {extra}"
+                    self.combo_display.addItem(label, disp_id)
+            else:
+                for disp_id in display_ids:
+                    self.combo_display.addItem(f"Display {disp_id}", disp_id)
 
-        if len(display_ids) > 1:
-            self.log_sys(f"Multiple displays detected: {', '.join(display_ids)}. Use Display selector to switch.")
+            if len(display_ids) > 1:
+                self.log_sys(f"Multiple displays detected: {', '.join(display_ids)}. Use Display selector to switch.")
 
-        ws = self._active_workspace()
         target_display = ws.selected_display_id if ws else None
         if target_display is not None:
             for i in range(self.combo_display.count()):
@@ -1618,18 +1762,23 @@ class MainWindow(QMainWindow):
                     self.combo_display.setCurrentIndex(i)
                     break
 
+        self.combo_display.setEnabled(bool(caps and caps.supports_multi_display))
         self.combo_display.blockSignals(False)
 
     def on_display_change(self, idx: int) -> None:
         if not self.active_device:
             return
+        ws = self._active_workspace()
+        if not self._require_capability(ws, "supports_multi_display", "Display change"):
+            self.combo_display.blockSignals(True)
+            self.combo_display.setCurrentIndex(0)
+            self.combo_display.blockSignals(False)
+            return
         display_id = self.combo_display.itemData(idx)
         self.selected_display_id = display_id
-        ws = self._active_workspace()
         if ws:
             ws.selected_display_id = display_id
-            if ws.recorder:
-                ws.recorder.record_event("display_changed", {"display_id": display_id})
+            self._record_event_capture(ws, "display_changed", {"display_id": display_id}, include_xml=True)
         AdbManager.set_preferred_display_id(self.active_device, display_id)
         if display_id:
             self.log_sys(f"Display set to {display_id} for live capture and dumps")
@@ -1798,15 +1947,17 @@ class MainWindow(QMainWindow):
     def handle_tap(self, x, y):
         # Always log the tap coordinate to help users who need manual test coordinates (System UI workaround)
         if self.video_thread:
+            ws = self._active_workspace()
+            if not self._require_capability(ws, "supports_input", "Tap input"):
+                return
             dx, dy = self.to_device_coords(x, y)
             # Log as raw coords AND as a copy-pasteable Java snippet
             self.log_sys(f"👆 Tap({int(dx)}, {int(dy)})")
             self.log_sys(f"   📋 Java: clickSystemCoordinate({int(dx)}, {int(dy)});")
             
             AdbManager.tap(self.active_device, dx, dy)
-            ws = self._active_workspace()
-            if ws and ws.recorder:
-                ws.recorder.record_event("tap", {"x": int(dx), "y": int(dy)})
+            if ws:
+                self._record_event_capture(ws, "tap", {"x": int(dx), "y": int(dy)}, include_xml=True)
             self.request_tree_refresh()
         else:
             # Lock selection in offline mode
@@ -1816,15 +1967,19 @@ class MainWindow(QMainWindow):
 
     def handle_swipe(self, x1, y1, x2, y2):
         if self.video_thread:
+            ws = self._active_workspace()
+            if not self._require_capability(ws, "supports_input", "Swipe input"):
+                return
             dx1, dy1 = self.to_device_coords(x1, y1)
             dx2, dy2 = self.to_device_coords(x2, y2)
             self.log_sys(f"👆 Swipe Input: ({int(dx1)}, {int(dy1)}) -> ({int(dx2)}, {int(dy2)})")
             AdbManager.swipe(self.active_device, dx1, dy1, dx2, dy2)
-            ws = self._active_workspace()
-            if ws and ws.recorder:
-                ws.recorder.record_event(
+            if ws:
+                self._record_event_capture(
+                    ws,
                     "swipe",
                     {"x1": int(dx1), "y1": int(dy1), "x2": int(dx2), "y2": int(dy2)},
+                    include_xml=True,
                 )
             self.request_tree_refresh()
 
@@ -1894,9 +2049,13 @@ class MainWindow(QMainWindow):
     def capture_snapshot(self):
         if not self.active_device:
             return
+        ws = self._active_workspace()
+        if not self._require_capability(ws, "supports_screencap", "Snapshot capture"):
+            return
+        if not self._require_capability(ws, "supports_uia_dump", "Snapshot capture"):
+            return
         d = QFileDialog.getExistingDirectory(self, "Save Snapshot")
         if d:
-            ws = self._active_workspace()
             if ws and ws.recorder and ws.video_thread:
                 path = ws.recorder.export_snapshot(destination_root=Path(d), bookmark_label="manual")
                 ws.last_snapshot_path = str(path)
@@ -2075,6 +2234,9 @@ class MainWindow(QMainWindow):
     def toggle_emulator_beta(self) -> None:
         self.settings.emulator_beta_enabled = self.chk_emulator_beta.isChecked()
         self.settings.save()
+        for ws in self.workspaces.values():
+            self._refresh_workspace_capabilities(ws)
+        self._apply_capability_state()
         state = "enabled" if self.settings.emulator_beta_enabled else "disabled"
         self.log_sys(f"Emulator beta support {state}")
 
@@ -2530,6 +2692,9 @@ class MainWindow(QMainWindow):
             self.set_tree_placeholder("UI dump unavailable", msg)
 
     def request_tree_refresh(self, reason: str = "", log: bool = False) -> None:
+        ws = self._active_workspace()
+        if not self._require_capability(ws, "supports_uia_dump", "UI tree refresh", quiet=True):
+            return
         if self.xml_thread and hasattr(self.xml_thread, "request_refresh"):
             self.xml_thread.request_refresh()
             if log and reason:
@@ -2553,9 +2718,13 @@ class MainWindow(QMainWindow):
         if not self.active_device:
             self.log_sys("Re-capture requested but no device is selected")
             return
+        ws = self._active_workspace()
+        if not self._require_capability(ws, "supports_screencap", "Snapshot re-capture"):
+            return
+        if not self._require_capability(ws, "supports_uia_dump", "Snapshot re-capture"):
+            return
         AdbManager.capture_snapshot(self.active_device, self.last_snapshot_path)
         self.load_snapshot(self.last_snapshot_path)
-        ws = self._active_workspace()
         if ws:
             ws.last_snapshot_path = self.last_snapshot_path
         self.log_sys(f"Snapshot re-captured: {self.last_snapshot_path}")
